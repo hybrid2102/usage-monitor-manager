@@ -1,0 +1,14 @@
+[project]
+name = "usage-monitor-manager"
+version = "0.1.0"
+description = "Tray app che unifica config, update e controllo processi per le istanze usage-monitor-*"
+requires-python = ">=3.10"
+dependencies = [
+    "pystray>=0.19",
+    "Pillow>=10.0",
+    "psutil>=5.9",
+    "requests>=2.31",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
