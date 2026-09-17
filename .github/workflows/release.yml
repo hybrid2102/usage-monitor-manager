@@ -1,0 +1,12 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  placeholder:
+    runs-on: windows-latest
+    steps:
+      - name: Not yet implemented
+        run: echo "build in Phase 4"
