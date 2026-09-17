@@ -11,9 +11,11 @@ import sys
 
 if sys.platform == "win32":
     from .win32 import (
+        DETACHED_PROCESS,
         delete_run_key,
         file_product_name,
         file_version,
+        mutex_is_held,
         no_window_popen_kwargs,
         parse_run_command,
         read_run_entries,
@@ -23,9 +25,11 @@ if sys.platform == "win32":
     )
 else:  # pragma: no cover - the v1 target is Windows only
     from .linux import (
+        DETACHED_PROCESS,
         delete_run_key,
         file_product_name,
         file_version,
+        mutex_is_held,
         no_window_popen_kwargs,
         parse_run_command,
         read_run_entries,
@@ -35,9 +39,11 @@ else:  # pragma: no cover - the v1 target is Windows only
     )
 
 __all__ = [
+    "DETACHED_PROCESS",
     "delete_run_key",
     "file_product_name",
     "file_version",
+    "mutex_is_held",
     "no_window_popen_kwargs",
     "parse_run_command",
     "read_run_entries",

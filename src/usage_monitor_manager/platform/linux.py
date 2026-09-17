@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 __all__ = [
+    "DETACHED_PROCESS",
     "delete_run_key",
     "file_product_name",
     "file_version",
+    "mutex_is_held",
     "no_window_popen_kwargs",
     "parse_run_command",
     "read_run_entries",
@@ -23,6 +25,9 @@ __all__ = [
     "read_shortcuts",
     "write_run_key",
 ]
+
+DETACHED_PROCESS = 0
+"""No such creation flag on POSIX: ``start_new_session`` plays that role."""
 
 _MESSAGE = "the Linux platform layer is a stub: see PLAN.md section 9.12"
 
@@ -68,6 +73,11 @@ def parse_run_command(value: str) -> tuple[Path | None, list[str]]:
 
 def read_shortcuts(paths: Sequence[Path]) -> dict[Path, tuple[Path | None, list[str]]]:
     """No ``.lnk`` files on Linux."""
+    _unsupported()
+
+
+def mutex_is_held(name: str) -> bool:
+    """A ``flock`` on a file under ``$XDG_RUNTIME_DIR`` would play this role."""
     _unsupported()
 
 

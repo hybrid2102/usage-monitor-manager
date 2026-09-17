@@ -31,6 +31,7 @@ __all__ = [
     "delete_run_key",
     "file_product_name",
     "file_version",
+    "mutex_is_held",
     "no_window_popen_kwargs",
     "parse_run_command",
     "read_run_entries",
@@ -46,6 +47,9 @@ DETACHED_PROCESS = 0x00000008
 
 _DEFAULT_TRANSLATION = (0x0409, 0x04B0)
 """US English / Unicode: what the monitors' ``version_info.py`` files declare."""
+
+ERROR_ALREADY_EXISTS = 183
+ERROR_ACCESS_DENIED = 5
 
 _version_dll = ctypes.WinDLL("version.dll")
 
@@ -323,3 +327,40 @@ def no_window_popen_kwargs() -> dict[str, Any]:
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     startupinfo.wShowWindow = subprocess.SW_HIDE
     return {"creationflags": CREATE_NO_WINDOW, "startupinfo": startupinfo}
+
+
+# --------------------------------------------------------------------------- #
+# Single-instance mutex probe
+# --------------------------------------------------------------------------- #
+
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+_kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+_kernel32.CreateMutexW.restype = wintypes.HANDLE
+_kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+_kernel32.CloseHandle.restype = wintypes.BOOL
+
+
+def mutex_is_held(name: str) -> bool:
+    """True when a named Win32 mutex already exists, i.e. an instance is alive.
+
+    This is the same check the monitors themselves do for their singleton
+    (``UsageMonitorForClaude_SingleInstance<suffix>``): ``CreateMutexW`` always
+    succeeds when the name is free, and sets ``ERROR_ALREADY_EXISTS`` when
+    somebody else owns it. The handle we may have just created is closed
+    immediately, so probing never becomes holding.
+
+    ``ERROR_ACCESS_DENIED`` means the object exists but belongs to a session or
+    user we may not open: that is "held" as far as we are concerned. Any other
+    failure is reported as free, because refusing to act on an unexplained
+    error would make ``stop``/``start`` unusable.
+    """
+    if not name:
+        return False
+    ctypes.set_last_error(0)
+    handle = _kernel32.CreateMutexW(None, False, name)
+    error = ctypes.get_last_error()
+    if handle:
+        _kernel32.CloseHandle(handle)
+        return error == ERROR_ALREADY_EXISTS
+    return error == ERROR_ACCESS_DENIED
