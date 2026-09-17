@@ -2,9 +2,15 @@
 
 The CLI is the primary consumer of the core modules: tray and window are
 clients of the same functions. Implemented so far: ``--version``, ``list``
-(Phase 1) and ``restart`` / ``stop`` / ``start`` (Phase 2). The remaining
-subcommands are wired up - so the surface is frozen and testable - and exit
-with ``EXIT_NOT_IMPLEMENTED``.
+(Phase 1), ``restart`` / ``stop`` / ``start`` (Phase 2) and
+``check`` / ``update`` / ``rollback`` (Phase 3). The remaining subcommands are
+wired up - so the surface is frozen and testable - and exit with
+``EXIT_NOT_IMPLEMENTED``.
+
+``umm update`` prints the release notes *before* the download starts and then
+redraws a single progress line in place, so the changelog stays readable for
+the whole download; on a non-TTY stdout the progress becomes plain lines
+instead (the PowerShell updater behaved the same way).
 
 Console encoding: the table marks the run state with U+25CF / U+25CB, which the
 default Windows console code page (cp1252) cannot encode. We switch stdout to
@@ -18,25 +24,35 @@ import argparse
 import io
 import json
 import os
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import __version__
 from .identity import normalize_config_dir
-from .model import Instance, JsonDict
+from .model import Instance, JsonDict, UpdatePlan
+from .versions import display_version
+
+if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
+    from .updater import UpdateEvent
 
 __all__ = [
     "ASCII_MARKERS",
     "EXIT_FAILED",
     "EXIT_NOT_IMPLEMENTED",
+    "EXIT_NETWORK",
     "EXIT_NO_MATCH",
     "EXIT_UPDATES_AVAILABLE",
     "RUN_MARKERS",
     "build_parser",
+    "convert_markdown_links",
+    "format_check_table",
     "format_instance_table",
     "main",
     "reconfigure_stdout",
+    "render_changelog",
     "select_instances",
 ]
 
@@ -48,6 +64,9 @@ EXIT_NOT_IMPLEMENTED = 2
 
 EXIT_NO_MATCH = 3
 """No instance matched the selectors."""
+
+EXIT_NETWORK = 3
+"""``umm check`` / ``umm update`` could not reach GitHub (or hit the rate limit)."""
 
 EXIT_UPDATES_AVAILABLE = 10
 """``umm check`` exit code when at least one update is available."""
@@ -104,15 +123,43 @@ def build_parser() -> argparse.ArgumentParser:
         _add_json(sub)
 
     check = subparsers.add_parser("check", help="check GitHub for monitor updates")
-    check.add_argument("--kind", choices=_KIND_CHOICES, help="limit the check to this kind")
+    check.add_argument(
+        "--kind",
+        action="append",
+        choices=_KIND_CHOICES,
+        metavar="KEY",
+        help="limit the check to this kind (repeatable)",
+    )
+    check.add_argument("--changelog", action="store_true", help="also print the release notes")
+    check.add_argument("--prerelease", action="store_true", help="consider prereleases too")
     _add_json(check)
 
     update = subparsers.add_parser("update", help="download and apply a monitor update")
-    update.add_argument("--kind", choices=_KIND_CHOICES, help="update this kind")
+    update.add_argument(
+        "--kind",
+        action="append",
+        choices=_KIND_CHOICES,
+        metavar="KEY",
+        help="update this kind (repeatable)",
+    )
     update.add_argument("--all", action="store_true", help="update every outdated executable")
     update.add_argument("--yes", action="store_true", help="do not ask for confirmation")
     update.add_argument("--no-restart", action="store_true", help="do not restart the instances")
+    update.add_argument("--dry-run", action="store_true", help="print every step, change nothing")
+    update.add_argument("--prerelease", action="store_true", help="consider prereleases too")
     _add_json(update)
+
+    rollback = subparsers.add_parser("rollback", help="restore the previous executable from its .bak")
+    rollback.add_argument(
+        "--kind",
+        action="append",
+        choices=_KIND_CHOICES,
+        metavar="KEY",
+        required=True,
+        help="roll back this kind's executable (repeatable)",
+    )
+    rollback.add_argument("--no-restart", action="store_true", help="do not restart the instances")
+    _add_json(rollback)
 
     config = subparsers.add_parser("config", help="inspect or edit instance settings")
     config.add_argument("action", choices=("show", "edit", "validate", "set"))
@@ -201,7 +248,7 @@ def _row(instance: Instance, markers: tuple[str, str]) -> tuple[str, ...]:
     return (
         instance.kind.display_name,
         label,
-        instance.exe_version or "?",
+        display_version(instance.exe_version) or "?",
         running if instance.is_running else stopped,
         _pids(instance),
         str(instance.settings_path) if instance.settings_path else "-",
@@ -383,6 +430,264 @@ def _cmd_process(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
     return EXIT_FAILED if any(not row.get("ok") for row in rows) else 0
 
 
+# --------------------------------------------------------------------------- #
+# umm check / update / rollback
+# --------------------------------------------------------------------------- #
+
+_IMAGE_LINK = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+_INLINE_LINK = re.compile(r"\[([^\]]+)\]\(([^)]*)\)")
+
+
+def convert_markdown_links(text: str) -> str:
+    """Render markdown links as ``text (url)`` and images as their alt text.
+
+    Port of ``Convert-MarkdownLink`` from the PowerShell updater, with one
+    deliberate difference: that script dropped the URL, while a console user
+    reading release notes usually wants it. Images keep only their alt text -
+    the URL of a screenshot is noise in a terminal.
+    """
+    without_images = _IMAGE_LINK.sub(r"\1", text)
+    return _INLINE_LINK.sub(lambda m: f"{m.group(1)} ({m.group(2)})" if m.group(2) else m.group(1), without_images)
+
+
+def render_changelog(body: str) -> list[str]:
+    """Release notes as plain text lines: headings, bullets, code kept verbatim."""
+    if not body.strip():
+        return ["  no release notes were published for this version"]
+    lines: list[str] = []
+    in_code = False
+    for raw in body.replace("\r\n", "\n").split("\n"):
+        line = raw.rstrip()
+        if line.lstrip().startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code:
+            lines.append(f"    {line}")
+            continue
+        line = convert_markdown_links(line)
+        stripped = line.strip()
+        if not stripped:
+            lines.append("")
+            continue
+        heading = re.match(r"^#{1,6}\s*(.+)$", stripped)
+        if heading:
+            lines.extend(["", f"  {heading.group(1).strip()}"])
+            continue
+        bullet = re.match(r"^[-*+]\s+(.+)$", stripped)
+        if bullet:
+            lines.append(f"  - {bullet.group(1).strip()}")
+            continue
+        lines.append(f"  {stripped}")
+    return lines
+
+
+def _print_changelog(plan: UpdatePlan) -> None:
+    print("")
+    print(f"What's new in {plan.kind.display_name} {plan.target.tag}  ({plan.target.html_url})")
+    for line in render_changelog(plan.target.body_markdown):
+        print(line)
+    print("")
+
+
+_CHECK_COLUMNS = ("KIND", "EXE", "LOCAL", "LATEST", "STATUS", "PUBLISHED")
+
+
+def _published(plan: UpdatePlan) -> str:
+    published = plan.target.published_at
+    return "-" if published is None else published.astimezone().strftime("%Y-%m-%d")
+
+
+def format_check_table(plans: Sequence[UpdatePlan]) -> str:
+    """Render the check result: kind, exe, local, latest, status, published date."""
+    from .updater import plan_status
+
+    if not plans:
+        return "no usage-monitor executable to check"
+    rows: list[tuple[str, ...]] = [_CHECK_COLUMNS]
+    for plan in plans:
+        rows.append(
+            (
+                plan.kind.display_name,
+                str(plan.exe_path),
+                display_version(plan.current_version) or "?",
+                plan.target.version or "?",
+                str(plan_status(plan)),
+                _published(plan),
+            )
+        )
+    widths = [max(len(row[column]) for row in rows) for column in range(len(_CHECK_COLUMNS))]
+    return "\n".join(
+        "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip() for row in rows
+    )
+
+
+def _build_plans(kinds: Sequence[str] | None, *, prerelease: bool) -> list[UpdatePlan]:
+    from .discovery import discover
+    from .updater import plan_updates
+
+    return list(plan_updates(discover(), kinds=kinds, include_prerelease=prerelease))
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    from .github import GitHubError
+    from .updater import plan_status
+    from .versions import VersionStatus
+
+    try:
+        plans = _build_plans(args.kind, prerelease=bool(args.prerelease))
+    except GitHubError as error:
+        print(f"umm check: {error}", file=sys.stderr)
+        return EXIT_NETWORK
+
+    if args.json:
+        payload: list[JsonDict] = []
+        for plan in plans:
+            entry = plan.to_dict()
+            entry["status"] = str(plan_status(plan))
+            payload.append(entry)
+        print(json.dumps(payload, indent=2))
+    else:
+        print(format_check_table(plans))
+        if args.changelog:
+            for plan in plans:
+                _print_changelog(plan)
+    return EXIT_UPDATES_AVAILABLE if any(plan_status(p) is VersionStatus.UPDATE_AVAILABLE for p in plans) else 0
+
+
+class _ProgressPrinter:
+    """One line redrawn in place on a TTY, plain lines on a pipe or a log file."""
+
+    def __init__(self, *, tty: bool) -> None:
+        self.tty = tty
+        self._last = -1.0
+        self._active = False
+
+    def __call__(self, event: UpdateEvent) -> None:
+        if event.step == "download" and event.progress is not None:
+            percent = round(event.progress * 100)
+            if self.tty:
+                print(f"\r  downloading {percent:3d}%", end="", flush=True)
+                self._active = True
+                return
+            if percent < 100 and percent - self._last < 25:
+                return
+            self._last = percent
+            print(f"  downloading {percent:3d}%")
+            return
+        if self._active:
+            print("")
+            self._active = False
+        print(f"  {event.message}")
+
+
+def _confirm(question: str) -> bool:
+    try:
+        answer = input(f"{question} [y/N] ").strip().casefold()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
+
+def _cmd_update(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from .github import GitHubError
+    from .updater import apply as apply_plan
+    from .updater import describe, plan_status
+    from .versions import VersionStatus
+
+    if not args.kind and not args.all:
+        parser.error("update: pick --kind KEY or --all")
+
+    try:
+        plans = _build_plans(args.kind, prerelease=bool(args.prerelease))
+    except GitHubError as error:
+        print(f"umm update: {error}", file=sys.stderr)
+        return EXIT_NETWORK
+
+    outdated = [p for p in plans if plan_status(p) is VersionStatus.UPDATE_AVAILABLE]
+    if not outdated:
+        message = "nothing to update: every executable is already up to date"
+        print(json.dumps({"action": "update", "plans": [], "detail": message}, indent=2) if args.json else message)
+        return 0
+
+    restart = not args.no_restart
+    if args.dry_run:
+        plan_lines: list[JsonDict] = []
+        for plan in outdated:
+            steps = describe(plan, restart=restart)
+            plan_lines.append({"kind": plan.kind.key, "exe_path": str(plan.exe_path), "steps": steps})
+            if not args.json:
+                _print_changelog(plan)
+                for line in steps:
+                    print(f"  {line}")
+        if args.json:
+            print(json.dumps({"action": "update", "dry_run": True, "plans": plan_lines}, indent=2))
+        return 0
+
+    results: list[JsonDict] = []
+    failed = False
+    tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
+    for plan in outdated:
+        if not args.json:
+            _print_changelog(plan)  # printed before the download, as the old updater did
+        if not args.yes and not _confirm(f"update {plan.kind.display_name} to {plan.target.version}?"):
+            print("skipped")
+            continue
+        printer = _ProgressPrinter(tty=tty) if not args.json else None
+        result = apply_plan(
+            plan,
+            on_event=printer,
+            confirm_unverified=(lambda: True)
+            if args.yes
+            else (lambda: _confirm("no sha256 published; install anyway?")),
+            restart=restart,
+        )
+        results.append(result.to_dict())
+        failed = failed or not result.ok
+        if not args.json:
+            print(f"{'ok  ' if result.ok else 'FAIL'} {plan.kind.key}: {result.detail}")
+    if args.json:
+        print(json.dumps(results, indent=2))
+    return EXIT_FAILED if failed else 0
+
+
+def _cmd_rollback(args: argparse.Namespace) -> int:
+    from .discovery import discover
+    from .kinds import get_kind
+    from .updater import rollback as rollback_exe
+
+    instances = discover()
+    results: list[JsonDict] = []
+    failed = False
+    matched = False
+    for key in args.kind:
+        kind = get_kind(key)
+        exe_paths: list[Path] = []
+        for instance in instances:
+            if instance.kind.key == kind.key and instance.exe_path is not None:
+                if all(_normcase(instance.exe_path) != _normcase(known) for known in exe_paths):
+                    exe_paths.append(instance.exe_path)
+        if not exe_paths:
+            print(f"no {kind.display_name} executable found", file=sys.stderr)
+            continue
+        matched = True
+        for exe_path in exe_paths:
+            result = rollback_exe(
+                exe_path,
+                instances=instances,
+                restart=not args.no_restart,
+                on_event=None if args.json else lambda event: print(f"  {event.message}"),
+            )
+            results.append(result.to_dict())
+            failed = failed or not result.ok
+            if not args.json:
+                print(f"{'ok  ' if result.ok else 'FAIL'} {kind.key}: {result.detail}")
+    if args.json:
+        print(json.dumps(results, indent=2))
+    if not matched:
+        return EXIT_NO_MATCH
+    return EXIT_FAILED if failed else 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for the ``umm`` console script."""
     reconfigure_stdout()
@@ -395,6 +700,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_list(bool(args.json))
     if args.command in _PROCESS_COMMANDS:
         return _cmd_process(args, parser)
+    if args.command == "check":
+        return _cmd_check(args)
+    if args.command == "update":
+        return _cmd_update(args, parser)
+    if args.command == "rollback":
+        return _cmd_rollback(args)
     print(f"umm {args.command}: not implemented")
     return EXIT_NOT_IMPLEMENTED
 

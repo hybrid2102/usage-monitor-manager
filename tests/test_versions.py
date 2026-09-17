@@ -10,6 +10,7 @@ import pytest
 from usage_monitor_manager.versions import (
     VersionStatus,
     compare,
+    display_version,
     exe_mtime,
     exe_version,
     format_version,
@@ -95,3 +96,18 @@ def test_exe_mtime(tmp_path: Path) -> None:
     assert stamp.tzinfo is not None
     assert exe_mtime(tmp_path / "missing.exe") is None
     assert exe_mtime(None) is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("1.22.0.0", "1.22.0"),
+        ("0.3.1.0", "0.3.1"),
+        ("v0.3.2", "0.3.2"),
+        ("1.22", "1.22.0"),
+        (None, None),
+        ("", None),
+    ],
+)
+def test_display_version_shows_three_components(raw: str | None, expected: str | None) -> None:
+    assert display_version(raw) == expected

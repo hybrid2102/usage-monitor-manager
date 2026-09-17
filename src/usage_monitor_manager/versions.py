@@ -17,6 +17,7 @@ from .platform import file_version
 __all__ = [
     "VersionStatus",
     "compare",
+    "display_version",
     "exe_mtime",
     "exe_version",
     "format_version",
@@ -59,6 +60,19 @@ def parse_version(text: str | None) -> tuple[int, int, int]:
 def format_version(text: str | None) -> str:
     """Normalize a version string to its canonical ``a.b.c`` form."""
     return ".".join(str(part) for part in parse_version(text))
+
+
+def display_version(pe_version: str | None) -> str | None:
+    """Version as a user should read it: three components, no PE padding.
+
+    The executables carry ``1.22.0.0`` while the releases are tagged
+    ``v1.22.0``; showing the PE form next to the tag makes every up-to-date
+    instance look different from its release. ``None`` in, ``None`` out, so the
+    caller keeps its own placeholder ("?" in the CLI table).
+    """
+    if not pe_version:
+        return None
+    return format_version(pe_version)
 
 
 def compare(a: str | None, b: str | None) -> int:

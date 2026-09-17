@@ -52,8 +52,9 @@ umm --version
 umm list [--json]
 umm restart (--all | --kind claude | --config-dir PATH | --id ...)
 umm stop / start ...
-umm check [--kind ...] [--json]
-umm update --kind copilot [--yes] [--no-restart]
+umm check [--kind ...] [--changelog] [--prerelease] [--json]
+umm update (--kind copilot | --all) [--yes] [--no-restart] [--dry-run] [--json]
+umm rollback --kind copilot [--no-restart] [--json]
 umm config show|edit|validate|set KEY VALUE --instance ...
 umm self-update [--check-only]
 umm status [--json]
@@ -63,21 +64,26 @@ Senza argomenti, `python -m usage_monitor_manager` avvia la modalità tray.
 
 ## Stato
 
-**Fase 2 (Controllo processi) completata** (`v0.3.0`). Oltre allo scheletro
-della Fase 0 (`kinds.py`, `model.py`, `identity.py`, tooling, CI) sono reali e
-testati:
+**Fase 3 (Update engine) completata** (`v0.4.0`). **Da qui
+`usage-monitor-updater` (PowerShell) è sostituibile**: confronto versioni,
+changelog, download verificato, swap con `.bak`, riavvio delle istanze e
+rollback sono coperti da `umm check` / `umm update` / `umm rollback`.
+
+Oltre allo scheletro della Fase 0 (`kinds.py`, `model.py`, `identity.py`,
+tooling, CI) sono reali e testati:
 
 - `platform/` — dispatcher su `sys.platform`; `win32.py` implementa la lettura
   della versione PE (`ProductVersion` / `FileVersion` / `VS_FIXEDFILEINFO` via
   `version.dll` in ctypes), il `ProductName`, le voci di `HKCU\...\Run` (winreg)
   con parsing dei comandi quotati, la lettura in blocco degli shortcut `.lnk`
-  (una sola chiamata a `WScript.Shell`), i flag Popen senza finestra e la sonda
+  (una sola chiamata a `WScript.Shell`), i flag Popen senza finestra, la sonda
   del mutex singleton (`mutex_is_held`: `CreateMutexW` +
-  `ERROR_ALREADY_EXISTS`, handle chiuso subito);
+  `ERROR_ALREADY_EXISTS`, handle chiuso subito) e lo stato Authenticode
+  (`WinVerifyTrust` in ctypes, solo informativo);
   `linux.py` resta uno stub documentato;
 - `versions.py` — parsing tollerante (`v1.22.0`, `1.22.0.0` → `1.22.0`),
-  confronto e stati `up_to_date` / `update_available` / `newer_local` /
-  `unknown`;
+  confronto, `display_version` (3 componenti, usata anche in `umm list`) e
+  stati `up_to_date` / `update_available` / `newer_local` / `unknown`;
 - `discovery.py` — scan dei processi con psutil, collasso delle coppie
   bootloader/app di PyInstaller, risoluzione del config dir (`--config-dir` →
   env var → default, con la sorgente registrata e `unknown` su AccessDenied),
@@ -90,12 +96,38 @@ testati:
   default, ri-discovery di conferma, rifiuto se il mutex è già occupato),
   `restart`, `stop_all` / `restart_all` / `start_missing`; risultati come
   dataclass frozen con `to_dict()` e progresso via `on_event(ProcessEvent)`;
+- `github.py` — client `urllib` delle release (`User-Agent`,
+  `Accept: application/vnd.github+json`, `Authorization: Bearer` opzionale),
+  cache ETag su disco con `If-None-Match` e riuso del body sul `304`, rate
+  limit → `RateLimitedError(reset_at)` con lo stato `X-RateLimit-*` esposto,
+  selezione dell'asset (porting di `Select-ReleaseAsset`, euristiche di
+  architettura), `digest` dell'API e sidecar `.sha256`, download in streaming
+  con progress e controllo della dimensione. Token: parametro →
+  `GITHUB_TOKEN` / `GH_TOKEN` → anonimo (Credential Manager alla Fase 6);
+- `integrity.py` — `sha256_file`, `verify_digest`, `parse_sidecar` (formati
+  `<hex>  <nome>` e hex nudo) e `authenticode_status`
+  (`signed_valid` / `not_signed` / `invalid(<codice>)` / `unavailable`): la
+  firma è **solo informativa**, le build upstream sono unsigned;
+- `updater.py` — `plan_updates` (un piano **per exe**: le due istanze Claude
+  condividono il file e finiscono nello stesso piano), `apply` con la sequenza
+  della §6.3 (download → verifica → Authenticode → stop → `.bak` →
+  swap → riavvio delle sole istanze che erano attive → verifica dopo 5 s →
+  pulizia del `.bak`), `rollback`, eventi `UpdateEvent` per CLI e UI, e
+  `FileSwapper` con retry 5x2 s e ripristino del `.bak` su errore. Nessuna
+  operazione sui processi fuori da `process_control`; un asset senza sha256
+  richiede una conferma esplicita, altrimenti l'update viene annullato e il
+  download cancellato;
 - `umm list [--json]` — tabella leggibile (con fallback ASCII sulle console
   cp1252) o dump JSON di `Instance.to_dict()`;
 - `umm restart|stop|start` — selettori `--all`, `--kind` (ripetibile),
   `--config-dir` (ripetibile), `--id KIND:SUFFIX`, più `--json` e `--dry-run`;
   uscita 0 se tutto è andato bene, 1 se un'operazione è fallita, 3 se nessuna
-  istanza corrisponde ai selettori.
+  istanza corrisponde ai selettori;
+- `umm check|update|rollback` — tabella kind/exe/locale/remota/stato/data,
+  `--changelog` (link markdown resi come `testo (url)`), changelog stampato
+  **prima** del download e progresso ridisegnato su una sola riga quando stdout
+  è un TTY, `--dry-run` che elenca ogni passo senza toccare nulla; uscita 10 da
+  `umm check` se c'è un aggiornamento, 3 su errore di rete o rate limit.
 
 Tre regole di sicurezza governano il controllo processi:
 
@@ -110,26 +142,51 @@ Tre regole di sicurezza governano il controllo processi:
    var del kind: viene rimossa per il config dir di default e impostata
    esplicitamente per gli altri.
 
+L'update aggiunge le proprie:
+
+4. si aggiorna **un exe**, si riavvia **un'istanza**: il piano ferma e riavvia
+   tutte le istanze che usano quel file, e solo quelle che erano in esecuzione;
+5. l'exe nuovo arriva nella stessa cartella del vecchio (`.download`), così lo
+   swap finale è un rename; il `.bak` resta finché il controllo post-avvio non
+   riesce, e `umm rollback --kind K` lo rimette al suo posto;
+6. sha256 mancante = update rifiutato salvo conferma esplicita; sha256 diverso =
+   update annullato e file scaricato cancellato, senza toccare l'exe.
+
 Esempio su una macchina con quattro istanze attive:
 
 ```
-KIND     CONFIG DIR                      VERSION   RUN  PIDS         AUTO  SOURCES
-Claude   C:\Users\Marco\.claude          1.22.0.0  ●    32472/32520  Y     process,run_key,settings_file
-Claude   C:\Users\Marco\.claude-valeria  1.22.0.0  ●    82104/93020  Y     process,run_key,shortcut,settings_file
-Copilot  C:\Users\Marco\.copilot         0.3.1.0   ●    32440/17540  Y     process,run_key,settings_file
-Codex    C:\Users\Marco\.codex           0.1.0.0   ●    83312/18204  Y     process,run_key,settings_file
+KIND     CONFIG DIR                      VERSION  RUN  PIDS         AUTO  SOURCES
+Claude   C:\Users\Marco\.claude          1.22.0   ●    32472/32520  Y     process,run_key,settings_file
+Claude   C:\Users\Marco\.claude-valeria  1.22.0   ●    82104/93020  Y     process,run_key,shortcut,settings_file
+Copilot  C:\Users\Marco\.copilot         0.3.1    ●    32440/17540  Y     process,run_key,settings_file
+Codex    C:\Users\Marco\.codex           0.1.0    ●    83312/18204  Y     process,run_key,settings_file
 ```
 
-E l'anteprima di un riavvio, che non tocca nulla:
+Il controllo aggiornamenti sulla stessa macchina (uscita 10):
 
 ```
-> umm restart --dry-run --all
-would stop claude pids 63192 then wait for the UsageMonitorForClaude_SingleInstance mutex
-would start claude: D:\...\UsageMonitorForClaude.exe (without CLAUDE_CONFIG_DIR)
-would stop claude_578560bbc610 pids 98936 then wait for the UsageMonitorForClaude_SingleInstance_578560bbc610 mutex
-would start claude_578560bbc610: D:\...\UsageMonitorForClaude.exe --config-dir=C:\Users\Marco\.claude-valeria CLAUDE_CONFIG_DIR=C:\Users\Marco\.claude-valeria
+> umm check
+KIND     EXE                                                               LOCAL   LATEST  STATUS            PUBLISHED
+Claude   D:\OneDrive\Software\Tools\AI\Claude\UsageMonitorForClaude.exe    1.22.0  1.22.0  up_to_date        2026-09-03
+Copilot  D:\OneDrive\Software\Tools\AI\Copilot\UsageMonitorForCopilot.exe  0.3.1   0.3.2   update_available  2026-09-17
+Codex    D:\OneDrive\Software\Tools\AI\Codex\UsageMonitorForCodex.exe      0.1.0   0.1.0   up_to_date        2026-09-07
 ```
 
-I moduli delle fasi successive (update engine, tray/dashboard, editor
-impostazioni, self-update) sono ancora stub con docstring di responsabilità e
-sono descritti in PLAN.md §7.
+E l'anteprima di un aggiornamento, che non tocca nulla:
+
+```
+> umm update --kind copilot --dry-run
+  would update Copilot 0.3.1 -> 0.3.2 (v0.3.2) at D:\...\UsageMonitorForCopilot.exe
+  would download UsageMonitorForCopilot.exe (15260446 bytes) to D:\...\UsageMonitorForCopilot.exe.download
+  would verify sha256 against the GitHub API digest
+  would read the Authenticode state of UsageMonitorForCopilot.exe.download (information only)
+  would stop copilot pids 7860, 32048 then wait for the UsageMonitorForCopilot_SingleInstance mutex
+  would rename UsageMonitorForCopilot.exe to UsageMonitorForCopilot.exe.bak (retry 5x2s)
+  would rename UsageMonitorForCopilot.exe.download to UsageMonitorForCopilot.exe, restoring the .bak on failure
+  would start copilot: D:\...\UsageMonitorForCopilot.exe
+  would check after 5s that the instances run and the PE version is 0.3.2, then delete the .bak
+```
+
+I moduli delle fasi successive (tray/dashboard, editor impostazioni,
+self-update, watchdog, archivio) sono ancora stub con docstring di
+responsabilità e sono descritti in PLAN.md §7.

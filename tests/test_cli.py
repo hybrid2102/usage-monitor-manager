@@ -98,8 +98,6 @@ def test_version_exits_zero_and_prints_version(capsys: pytest.CaptureFixture[str
 @pytest.mark.parametrize(
     "argv",
     [
-        ["check"],
-        ["update", "--kind", "copilot", "--yes"],
         ["config", "show", "--instance", "claude"],
         ["self-update", "--check-only"],
         ["status", "--json"],
@@ -136,7 +134,7 @@ def test_module_entry_without_args_is_tray_placeholder(capsys: pytest.CaptureFix
 
 
 def test_module_entry_with_args_dispatches_to_cli() -> None:
-    assert __main__.main(["check"]) == EXIT_NOT_IMPLEMENTED
+    assert __main__.main(["self-update", "--check-only"]) == EXIT_NOT_IMPLEMENTED
 
 
 # --------------------------------------------------------------------------- #

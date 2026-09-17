@@ -14,6 +14,7 @@ from typing import Any, NoReturn
 
 __all__ = [
     "DETACHED_PROCESS",
+    "authenticode_status",
     "delete_run_key",
     "file_product_name",
     "file_version",
@@ -84,3 +85,8 @@ def mutex_is_held(name: str) -> bool:
 def no_window_popen_kwargs() -> dict[str, Any]:
     """Nothing to hide: no console windows are created on Linux."""
     return {}
+
+
+def authenticode_status(path: Path | str) -> str:
+    """No Authenticode on Linux: the caller treats this as information only."""
+    return "unavailable"

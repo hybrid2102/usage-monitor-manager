@@ -12,6 +12,7 @@ import sys
 if sys.platform == "win32":
     from .win32 import (
         DETACHED_PROCESS,
+        authenticode_status,
         delete_run_key,
         file_product_name,
         file_version,
@@ -26,6 +27,7 @@ if sys.platform == "win32":
 else:  # pragma: no cover - the v1 target is Windows only
     from .linux import (
         DETACHED_PROCESS,
+        authenticode_status,
         delete_run_key,
         file_product_name,
         file_version,
@@ -40,6 +42,7 @@ else:  # pragma: no cover - the v1 target is Windows only
 
 __all__ = [
     "DETACHED_PROCESS",
+    "authenticode_status",
     "delete_run_key",
     "file_product_name",
     "file_version",
