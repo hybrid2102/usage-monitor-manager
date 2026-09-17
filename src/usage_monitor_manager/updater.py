@@ -1,54 +1,27 @@
-"""Controllo e applicazione aggiornamenti per istanza.
+"""Update execution: download, verify, stop, swap, restart, rollback.
 
-Riscrittura nativa (Python) della logica di usage-monitor-updater:
-check dell'ultima release GitHub, download, verifica, sostituzione binario.
+Phase 0: stub. Implemented in phase 3 of PLAN.md section 7.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
 
-import requests
+from .model import Instance, UpdatePlan
 
-from .models import Instance
-
-GITHUB_API = "https://api.github.com/repos/{repo}/releases/latest"
+__all__ = ["apply_plan", "plan_update", "rollback"]
 
 
-@dataclass
-class UpdateCheckResult:
-    instance_id: str
-    current_version: str | None
-    latest_version: str
-    update_available: bool
-    download_url: str | None
+def plan_update(instances: Sequence[Instance]) -> Sequence[UpdatePlan]:
+    """Group instances by executable and build one plan per outdated exe."""
+    raise NotImplementedError
 
 
-def check_latest_release(instance: Instance) -> UpdateCheckResult | None:
-    """Interroga la latest release del repo configurato per l'istanza."""
-    if not instance.update_repo:
-        return None
-
-    resp = requests.get(GITHUB_API.format(repo=instance.update_repo), timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
-
-    latest_version = data.get("tag_name", "")
-    # TODO: confrontare con la versione installata (da leggere dal binario/manifest locale)
-    # TODO: individuare l'asset giusto tra data["assets"] per piattaforma/tipo istanza
-
-    return UpdateCheckResult(
-        instance_id=instance.id,
-        current_version=None,
-        latest_version=latest_version,
-        update_available=True,  # placeholder finché non c'è il confronto versioni
-        download_url=None,
-    )
+def apply_plan(plan: UpdatePlan, progress_cb: Callable[[str], None] | None = None) -> bool:
+    """Run the plan's steps, keeping a ``.bak`` until the post-start check passes."""
+    raise NotImplementedError
 
 
-def apply_update(instance: Instance, result: UpdateCheckResult) -> None:
-    """Scarica il nuovo binario, lo verifica e sostituisce quello esistente."""
-    # TODO: download in file temporaneo
-    # TODO: verifica (hash/firma se disponibile)
-    # TODO: stop istanza (process_control) -> sostituzione file -> restart
+def rollback(plan: UpdatePlan) -> bool:
+    """Restore the ``.bak`` executable and restart the affected instances."""
     raise NotImplementedError

@@ -1,14 +1,54 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "usage-monitor-manager"
-version = "0.1.0"
-description = "Tray app che unifica config, update e controllo processi per le istanze usage-monitor-*"
-requires-python = ">=3.10"
+dynamic = ["version"]
+description = "Tray app and CLI that unify config, updates and process control for the usage-monitor family"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "hybrid2102" }]
 dependencies = [
     "pystray>=0.19",
     "Pillow>=10.0",
     "psutil>=5.9",
-    "requests>=2.31",
+    "pywebview>=5.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+umm = "usage_monitor_manager.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "usage_monitor_manager.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pyright]
+include = ["src"]
+typeCheckingMode = "strict"
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

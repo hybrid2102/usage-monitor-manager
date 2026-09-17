@@ -1,46 +1,27 @@
-"""Avvio, stop e riavvio manuale delle istanze configurate."""
+"""Start / stop / restart of monitor instances (never of foreign processes).
+
+Phase 0: stub. Implemented in phase 2 of PLAN.md section 7.
+"""
 
 from __future__ import annotations
 
-import os
-import subprocess
+from collections.abc import Sequence
 
-import psutil
+from .model import Instance
 
-from .models import Instance
-
-# Mappa in-memory: instance.id -> PID del processo avviato da questo manager.
-_running: dict[str, int] = {}
+__all__ = ["restart", "start", "stop"]
 
 
-def is_running(instance: Instance) -> bool:
-    pid = _running.get(instance.id)
-    if pid is None:
-        return False
-    return psutil.pid_exists(pid)
+def stop(instance: Instance, timeout: float = 15.0) -> bool:
+    """Terminate the app pid then the bootloader; confirm the mutex is free."""
+    raise NotImplementedError
 
 
-def start(instance: Instance) -> None:
-    if is_running(instance):
-        return
-    env = {**os.environ, **instance.env}
-    proc = subprocess.Popen(
-        [instance.exe_path, *instance.args],
-        env=env,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-    )
-    _running[instance.id] = proc.pid
+def start(instance: Instance) -> Instance:
+    """Launch the executable detached, with an explicit ``--config-dir``."""
+    raise NotImplementedError
 
 
-def stop(instance: Instance) -> None:
-    pid = _running.get(instance.id)
-    if pid is None or not psutil.pid_exists(pid):
-        _running.pop(instance.id, None)
-        return
-    psutil.Process(pid).terminate()
-    _running.pop(instance.id, None)
-
-
-def restart(instance: Instance) -> None:
-    stop(instance)
-    start(instance)
+def restart(instances: Sequence[Instance]) -> Sequence[Instance]:
+    """Stop every instance, then start them in sequence with a delay."""
+    raise NotImplementedError
