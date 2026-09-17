@@ -14,12 +14,18 @@ import os
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-__all__ = ["CONFIG_DIR_FLAG", "config_dir_suffix", "parse_config_dir"]
+__all__ = ["CONFIG_DIR_FLAG", "config_dir_suffix", "normalize_config_dir", "parse_config_dir"]
 
 CONFIG_DIR_FLAG = "--config-dir"
 
 
-def _normalize(raw: str) -> Path | None:
+def normalize_config_dir(raw: str) -> Path | None:
+    """Normalize one config-dir value (quotes, ``%VAR%``, ``~``, trailing sep).
+
+    Shared by the command-line parser below and by the discovery of config dirs
+    coming from the environment or from a Run-key command, so that all three
+    sources produce the same ``Path``.
+    """
     value = raw.strip().strip('"').strip("'")
     if not value:
         return None
@@ -46,11 +52,11 @@ def parse_config_dir(argv: Sequence[str] | Iterable[str]) -> Path | None:
         arg = args[index]
         if arg == CONFIG_DIR_FLAG:
             if index + 1 < len(args):
-                found = _normalize(args[index + 1]) or found
+                found = normalize_config_dir(args[index + 1]) or found
             index += 2
             continue
         if arg.startswith(f"{CONFIG_DIR_FLAG}="):
-            found = _normalize(arg[len(CONFIG_DIR_FLAG) + 1 :]) or found
+            found = normalize_config_dir(arg[len(CONFIG_DIR_FLAG) + 1 :]) or found
         index += 1
     return found
 

@@ -1,30 +1,325 @@
-"""Windows primitives: detached Popen, Run key, file version, WinVerifyTrust, hotkey.
+"""Windows primitives: PE file version, ``HKCU\\...\\Run`` entries, shortcuts, Popen flags.
 
-Phase 0: stub. Implemented in phase 1 of PLAN.md section 7.
+Everything here is ctypes / winreg / subprocess: no pywin32 dependency (PLAN.md
+section 4.2). The module is imported only when ``sys.platform == "win32"``; the
+dispatcher in ``platform/__init__.py`` picks it.
+
+Shortcut reading deserves a note. A ``.lnk`` is a binary shell-link structure
+and resolving it properly means COM (``IShellLinkW``), which through raw ctypes
+is a lot of fragile code for one legacy import path. We therefore shell out to
+PowerShell's ``WScript.Shell`` **once** for the whole batch of shortcuts and
+parse its JSON: one process per discovery pass, and the parsing rules stay
+Microsoft's instead of ours.
 """
 
 from __future__ import annotations
 
+import ctypes
+import json
+import subprocess
+import sys
+import winreg
+from collections.abc import Sequence
+from ctypes import wintypes
 from pathlib import Path
+from typing import Any, cast
 
-__all__ = ["delete_run_key", "file_version", "read_run_key", "write_run_key"]
+__all__ = [
+    "CREATE_NO_WINDOW",
+    "DETACHED_PROCESS",
+    "RUN_KEY_PATH",
+    "delete_run_key",
+    "file_product_name",
+    "file_version",
+    "no_window_popen_kwargs",
+    "parse_run_command",
+    "read_run_entries",
+    "read_run_key",
+    "read_shortcuts",
+    "write_run_key",
+]
+
+RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+CREATE_NO_WINDOW = 0x08000000
+DETACHED_PROCESS = 0x00000008
+
+_DEFAULT_TRANSLATION = (0x0409, 0x04B0)
+"""US English / Unicode: what the monitors' ``version_info.py`` files declare."""
+
+_version_dll = ctypes.WinDLL("version.dll")
+
+_version_dll.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, wintypes.LPDWORD]
+_version_dll.GetFileVersionInfoSizeW.restype = wintypes.DWORD
+_version_dll.GetFileVersionInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID]
+_version_dll.GetFileVersionInfoW.restype = wintypes.BOOL
+_version_dll.VerQueryValueW.argtypes = [
+    wintypes.LPCVOID,
+    wintypes.LPCWSTR,
+    ctypes.POINTER(wintypes.LPVOID),
+    ctypes.POINTER(wintypes.UINT),
+]
+_version_dll.VerQueryValueW.restype = wintypes.BOOL
 
 
-def file_version(path: Path) -> str | None:
-    """``GetFileVersionInfoW`` wrapper returning the ``ProductVersion`` string."""
-    raise NotImplementedError
+class _FixedFileInfo(ctypes.Structure):
+    """``VS_FIXEDFILEINFO``: the numeric version block always present in a PE."""
+
+    _fields_ = (
+        ("dwSignature", wintypes.DWORD),
+        ("dwStrucVersion", wintypes.DWORD),
+        ("dwFileVersionMS", wintypes.DWORD),
+        ("dwFileVersionLS", wintypes.DWORD),
+        ("dwProductVersionMS", wintypes.DWORD),
+        ("dwProductVersionLS", wintypes.DWORD),
+        ("dwFileFlagsMask", wintypes.DWORD),
+        ("dwFileFlags", wintypes.DWORD),
+        ("dwFileOS", wintypes.DWORD),
+        ("dwFileType", wintypes.DWORD),
+        ("dwFileSubtype", wintypes.DWORD),
+        ("dwFileDateMS", wintypes.DWORD),
+        ("dwFileDateLS", wintypes.DWORD),
+    )
+
+
+def _version_block(path: Path | str) -> ctypes.Array[ctypes.c_char] | None:
+    """Load the whole version resource of ``path`` into a buffer."""
+    text = str(path)
+    try:
+        size = _version_dll.GetFileVersionInfoSizeW(text, None)
+    except OSError:
+        return None
+    if not size:
+        return None
+    buffer = ctypes.create_string_buffer(size)
+    try:
+        ok = _version_dll.GetFileVersionInfoW(text, 0, size, buffer)
+    except OSError:
+        return None
+    return buffer if ok else None
+
+
+def _translations(block: ctypes.Array[ctypes.c_char]) -> list[tuple[int, int]]:
+    """Language / code-page pairs declared by the resource, default last."""
+    pointer = wintypes.LPVOID()
+    length = wintypes.UINT()
+    found: list[tuple[int, int]] = []
+    if _version_dll.VerQueryValueW(block, r"\VarFileInfo\Translation", ctypes.byref(pointer), ctypes.byref(length)):
+        address = pointer.value
+        count = length.value // 4  # puLen is in bytes here: two WORDs per pair
+        if address is not None and count:
+            words = (wintypes.WORD * (count * 2)).from_address(address)
+            found = [(int(words[i * 2]), int(words[i * 2 + 1])) for i in range(count)]
+    if _DEFAULT_TRANSLATION not in found:
+        found.append(_DEFAULT_TRANSLATION)
+    return found
+
+
+def _string_value(block: ctypes.Array[ctypes.c_char], name: str) -> str | None:
+    """Read one ``StringFileInfo`` entry, trying every declared translation."""
+    for lang, codepage in _translations(block):
+        sub_block = f"\\StringFileInfo\\{lang:04x}{codepage:04x}\\{name}"
+        pointer = wintypes.LPVOID()
+        length = wintypes.UINT()
+        if not _version_dll.VerQueryValueW(block, sub_block, ctypes.byref(pointer), ctypes.byref(length)):
+            continue
+        address = pointer.value
+        if address is None or not length.value:
+            continue
+        value = ctypes.wstring_at(address, length.value).split("\0", 1)[0].strip()
+        if value:
+            return value
+    return None
+
+
+def _fixed_product_version(block: ctypes.Array[ctypes.c_char]) -> str | None:
+    """Fallback: the four numbers of ``VS_FIXEDFILEINFO`` as ``a.b.c.d``."""
+    pointer = wintypes.LPVOID()
+    length = wintypes.UINT()
+    if not _version_dll.VerQueryValueW(block, "\\", ctypes.byref(pointer), ctypes.byref(length)):
+        return None
+    address = pointer.value
+    if address is None or length.value < ctypes.sizeof(_FixedFileInfo):
+        return None
+    info = _FixedFileInfo.from_address(address)
+    if info.dwSignature != 0xFEEF04BD:
+        return None
+    high, low = int(info.dwProductVersionMS), int(info.dwProductVersionLS)
+    return f"{high >> 16}.{high & 0xFFFF}.{low >> 16}.{low & 0xFFFF}"
+
+
+def file_version(path: Path | str) -> str | None:
+    """Return the ``ProductVersion`` of a PE file, or ``None`` if it has none.
+
+    Order: ``StringFileInfo\\ProductVersion`` (what the monitors set, e.g.
+    ``1.22.0.0``), then ``FileVersion``, then the numeric ``VS_FIXEDFILEINFO``
+    product version. Never raises: an unreadable or resource-less file yields
+    ``None``.
+    """
+    block = _version_block(path)
+    if block is None:
+        return None
+    string_version = _string_value(block, "ProductVersion") or _string_value(block, "FileVersion")
+    return string_version or _fixed_product_version(block)
+
+
+def file_product_name(path: Path | str) -> str | None:
+    """Return the PE ``ProductName`` (``Usage Monitor for Claude``) or ``None``."""
+    block = _version_block(path)
+    return None if block is None else _string_value(block, "ProductName")
+
+
+def read_run_entries() -> dict[str, str]:
+    """Every string value of ``HKCU\\...\\Run``, as ``{name: command}``."""
+    entries: dict[str, str] = {}
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH)
+    except OSError:
+        return entries
+    with key:
+        index = 0
+        while True:
+            try:
+                name, value, value_type = winreg.EnumValue(key, index)
+            except OSError:
+                break
+            index += 1
+            if value_type in (winreg.REG_SZ, winreg.REG_EXPAND_SZ) and isinstance(value, str):
+                entries[name] = value
+    return entries
 
 
 def read_run_key(name: str) -> str | None:
-    """Read the ``HKCU`` autostart entry named ``name``."""
-    raise NotImplementedError
+    """Read a single autostart entry, ``None`` when absent."""
+    return read_run_entries().get(name)
 
 
 def write_run_key(name: str, command: str) -> None:
-    """Create or update an autostart entry."""
-    raise NotImplementedError
+    """Create or update an autostart entry (used from Phase 4 on)."""
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH) as key:
+        winreg.SetValueEx(key, name, 0, winreg.REG_SZ, command)
 
 
 def delete_run_key(name: str) -> None:
-    """Remove an autostart entry if present."""
-    raise NotImplementedError
+    """Remove an autostart entry; a missing entry is not an error."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, name)
+    except FileNotFoundError:
+        return
+
+
+def _split_arguments(rest: str) -> list[str]:
+    """Split the argument tail of a command line, keeping Windows paths intact."""
+    tokens: list[str] = []
+    current: list[str] = []
+    in_quotes = False
+    for char in rest:
+        if char == '"':
+            in_quotes = not in_quotes
+            continue
+        if char.isspace() and not in_quotes:
+            if current:
+                tokens.append("".join(current))
+                current = []
+            continue
+        current.append(char)
+    if current:
+        tokens.append("".join(current))
+    return tokens
+
+
+def parse_run_command(value: str) -> tuple[Path | None, list[str]]:
+    """Split a Run-key command into executable and arguments.
+
+    Handles the quoted form the monitors write
+    (``"C:\\Tools\\UsageMonitorForClaude.exe" --config-dir="C:\\Users\\Marco\\.claude-valeria"``)
+    and unquoted commands whose path contains spaces, by extending the
+    executable until it ends in ``.exe``.
+    """
+    command = value.strip()
+    if not command:
+        return None, []
+    if command.startswith('"'):
+        end = command.find('"', 1)
+        if end == -1:
+            return Path(command[1:]), []
+        return Path(command[1:end]), _split_arguments(command[end + 1 :])
+
+    tokens = command.split(" ")
+    for index in range(len(tokens)):
+        head = " ".join(tokens[: index + 1])
+        if head.casefold().endswith(".exe"):
+            return Path(head), _split_arguments(" ".join(tokens[index + 1 :]))
+    return Path(tokens[0]), _split_arguments(" ".join(tokens[1:]))
+
+
+_SHORTCUT_SCRIPT = """
+$ErrorActionPreference = 'SilentlyContinue'
+$shell = New-Object -ComObject WScript.Shell
+$out = @()
+foreach ($p in $input) {
+  if ([string]::IsNullOrWhiteSpace($p)) { continue }
+  $lnk = $shell.CreateShortcut($p)
+  $out += [pscustomobject]@{ Link = $p; Target = $lnk.TargetPath; Arguments = $lnk.Arguments }
+}
+ConvertTo-Json -InputObject @($out) -Compress
+"""
+
+
+def read_shortcuts(paths: Sequence[Path]) -> dict[Path, tuple[Path | None, list[str]]]:
+    """Resolve several ``.lnk`` files in one PowerShell round trip.
+
+    Returns ``{lnk_path: (target, arguments)}``; shortcuts that cannot be read
+    are simply missing from the result. Never raises.
+    """
+    if not paths:
+        return {}
+    try:
+        completed = subprocess.run(  # noqa: S603 - fixed argv, paths travel through stdin
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                _SHORTCUT_SCRIPT,
+            ],
+            input="\n".join(str(p) for p in paths),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            **no_window_popen_kwargs(),
+        )
+        payload = cast(object, json.loads(completed.stdout or "[]"))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+
+    rows: list[object] = cast(list[object], payload) if isinstance(payload, list) else [payload]
+    result: dict[Path, tuple[Path | None, list[str]]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        fields = cast(dict[str, object], row)
+        link = fields.get("Link")
+        if not isinstance(link, str) or not link:
+            continue
+        target = fields.get("Target")
+        arguments = fields.get("Arguments")
+        result[Path(link)] = (
+            Path(target) if isinstance(target, str) and target else None,
+            _split_arguments(arguments) if isinstance(arguments, str) else [],
+        )
+    return result
+
+
+def no_window_popen_kwargs() -> dict[str, Any]:
+    """``Popen`` keyword arguments that keep any console window hidden."""
+    if sys.platform != "win32":  # pragma: no cover - the dispatcher never gets here
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {"creationflags": CREATE_NO_WINDOW, "startupinfo": startupinfo}

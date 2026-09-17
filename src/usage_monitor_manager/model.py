@@ -12,9 +12,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 __all__ = [
+    "CONFIG_DIR_SOURCES",
+    "ConfigDirSource",
     "Instance",
     "JsonDict",
     "MonitorKind",
@@ -25,6 +27,17 @@ __all__ = [
 ]
 
 JsonDict = dict[str, Any]
+
+ConfigDirSource = Literal["cmdline", "env", "default", "unknown"]
+"""Where an instance's config dir came from.
+
+``cmdline`` = ``--config-dir`` on the process command line, ``env`` = the
+kind's environment variable read from the process, ``default`` = the kind's
+default directory, ``unknown`` = the process denied inspection (PLAN.md
+section 8: never guess, say so).
+"""
+
+CONFIG_DIR_SOURCES: tuple[ConfigDirSource, ...] = ("cmdline", "env", "default", "unknown")
 
 
 def _path_str(value: Path | None) -> str | None:
@@ -119,8 +132,13 @@ class Instance:
     launch_env: Mapping[str, str] = field(default_factory=lambda: {})
     label: str | None = None
     sources: Sequence[str] = ()
-    config_dir_unknown: bool = False
+    config_dir_source: ConfigDirSource = "default"
     processes: ProcessPair | None = None
+
+    @property
+    def config_dir_unknown(self) -> bool:
+        """True when the config dir could not be determined (best guess shown)."""
+        return self.config_dir_source == "unknown"
 
     @property
     def instance_id(self) -> str:
@@ -149,6 +167,7 @@ class Instance:
             "launch_env": dict(self.launch_env),
             "label": self.label,
             "sources": list(self.sources),
+            "config_dir_source": self.config_dir_source,
             "config_dir_unknown": self.config_dir_unknown,
             "is_running": self.is_running,
             "processes": None if self.processes is None else self.processes.to_dict(),

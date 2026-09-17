@@ -1,19 +1,27 @@
 """Command line interface (``umm``).
 
 The CLI is the primary consumer of the core modules: tray and window are
-clients of the same functions. In Phase 0 only ``--version`` works; every
-subcommand is wired up (so the surface is frozen and testable) and exits with
-``EXIT_NOT_IMPLEMENTED``.
+clients of the same functions. Implemented so far: ``--version`` and ``list``
+(Phase 1). The remaining subcommands are wired up - so the surface is frozen
+and testable - and exit with ``EXIT_NOT_IMPLEMENTED``.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
 
 from . import __version__
+from .model import Instance
 
-__all__ = ["EXIT_NOT_IMPLEMENTED", "EXIT_UPDATES_AVAILABLE", "build_parser", "main"]
+__all__ = [
+    "EXIT_NOT_IMPLEMENTED",
+    "EXIT_UPDATES_AVAILABLE",
+    "build_parser",
+    "format_instance_table",
+    "main",
+]
 
 EXIT_NOT_IMPLEMENTED = 2
 """Exit code used by every not-yet-implemented handler."""
@@ -83,6 +91,55 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_COLUMNS = ("KIND", "CONFIG DIR", "VERSION", "RUN", "PIDS", "SETTINGS", "AUTO", "SOURCES")
+
+
+def _pids(instance: Instance) -> str:
+    processes = instance.processes
+    if processes is None:
+        return "-"
+    if processes.bootloader_pid is None:
+        return str(processes.app_pid)
+    return f"{processes.bootloader_pid}/{processes.app_pid}"
+
+
+def _row(instance: Instance) -> tuple[str, ...]:
+    label = instance.label or str(instance.config_dir)
+    if instance.config_dir_unknown:
+        label = f"{label} (?)"
+    return (
+        instance.kind.display_name,
+        label,
+        instance.exe_version or "?",
+        "●" if instance.is_running else "○",
+        _pids(instance),
+        str(instance.settings_path) if instance.settings_path else "-",
+        "Y" if instance.autostart_entry else "N",
+        ",".join(instance.sources) or "-",
+    )
+
+
+def format_instance_table(instances: Sequence[Instance]) -> str:
+    """Render the discovered instances as an aligned, human readable table."""
+    if not instances:
+        return "no usage-monitor instance found"
+    rows = [_COLUMNS, *(_row(instance) for instance in instances)]
+    widths = [max(len(row[column]) for row in rows) for column in range(len(_COLUMNS))]
+    lines = ["  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip() for row in rows]
+    return "\n".join(lines)
+
+
+def _cmd_list(as_json: bool) -> int:
+    from .discovery import discover  # imported lazily: psutil is not needed for --help
+
+    instances = discover()
+    if as_json:
+        print(json.dumps([instance.to_dict() for instance in instances], indent=2))
+    else:
+        print(format_instance_table(instances))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for the ``umm`` console script."""
     parser = build_parser()
@@ -90,6 +147,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return EXIT_NOT_IMPLEMENTED
+    if args.command == "list":
+        return _cmd_list(bool(args.json))
     print(f"umm {args.command}: not implemented")
     return EXIT_NOT_IMPLEMENTED
 

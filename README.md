@@ -63,16 +63,37 @@ Senza argomenti, `python -m usage_monitor_manager` avvia la modalità tray.
 
 ## Stato
 
-**Fase 0 (Reset) completata.** Il repo contiene lo scheletro compilabile del
-nuovo package: layout definitivo, `pyproject.toml`, ruff/pyright/pytest/
-pre-commit, CI su `windows-latest`, e le prime parti reali e testate:
+**Fase 1 (Discovery + versioni) completata** (`v0.2.0`). Oltre allo scheletro
+della Fase 0 (`kinds.py`, `model.py`, `identity.py`, tooling, CI) sono reali e
+testati:
 
-- `kinds.py` — registro dichiarativo dei tre kind (claude, copilot, codex);
-- `model.py` — dataclass del dominio con `to_dict()` per l'output JSON;
-- `identity.py` — parsing di `--config-dir` e calcolo del suffisso di istanza,
-  identico all'algoritmo dei monitor (`~/.claude-valeria` → `_578560bbc610`);
-- `cli.py` — superficie completa dei sottocomandi (per ora `exit 2`).
+- `platform/` — dispatcher su `sys.platform`; `win32.py` implementa la lettura
+  della versione PE (`ProductVersion` / `FileVersion` / `VS_FIXEDFILEINFO` via
+  `version.dll` in ctypes), il `ProductName`, le voci di `HKCU\...\Run` (winreg)
+  con parsing dei comandi quotati, la lettura in blocco degli shortcut `.lnk`
+  (una sola chiamata a `WScript.Shell`) e i flag Popen senza finestra;
+  `linux.py` resta uno stub documentato;
+- `versions.py` — parsing tollerante (`v1.22.0`, `1.22.0.0` → `1.22.0`),
+  confronto e stati `up_to_date` / `update_available` / `newer_local` /
+  `unknown`;
+- `discovery.py` — scan dei processi con psutil, collasso delle coppie
+  bootloader/app di PyInstaller, risoluzione del config dir (`--config-dir` →
+  env var → default, con la sorgente registrata e `unknown` su AccessDenied),
+  suffisso di istanza, replica della search order dei settings con i file "in
+  ombra", autostart per suffisso, istanze dormienti da Run key, shortcut legacy
+  e `usage-monitor-settings.json` sparsi;
+- `umm list [--json]` — tabella leggibile o dump JSON di `Instance.to_dict()`.
 
-Tutti gli altri moduli sono stub con docstring di responsabilità. Le fasi
-successive (discovery, controllo processi, update engine, tray/dashboard,
-editor impostazioni, self-update) sono descritte in PLAN.md §7.
+Esempio su una macchina con quattro istanze attive:
+
+```
+KIND     CONFIG DIR                      VERSION   RUN  PIDS         AUTO  SOURCES
+Claude   C:\Users\Marco\.claude          1.22.0.0  ●    32472/32520  Y     process,run_key,settings_file
+Claude   C:\Users\Marco\.claude-valeria  1.22.0.0  ●    82104/93020  Y     process,run_key,shortcut,settings_file
+Copilot  C:\Users\Marco\.copilot         0.3.1.0   ●    32440/17540  Y     process,run_key,settings_file
+Codex    C:\Users\Marco\.codex           0.1.0.0   ●    83312/18204  Y     process,run_key,settings_file
+```
+
+I moduli delle fasi successive (controllo processi, update engine,
+tray/dashboard, editor impostazioni, self-update) sono ancora stub con
+docstring di responsabilità e sono descritti in PLAN.md §7.
