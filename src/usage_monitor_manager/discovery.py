@@ -13,9 +13,16 @@ Implements PLAN.md section 6.1 step by step:
 5. replay the monitors' settings search order and report both the active file
    and the shadowed candidates;
 6. add the dormant instances (Run keys, legacy ``<exe> - *.lnk`` shortcuts,
-   stray ``usage-monitor-settings.json`` files) and merge them with the running
-   ones;
+   stray ``usage-monitor-settings.json`` files, the executables of the
+   ``github-exe`` kinds found next to the ones we already know) and merge them
+   with the running ones;
 7. emit a stable, serializable, sorted list.
+
+A ``github-exe`` kind (PLAN.md section 9.9) takes a shortcut through all of
+this: it has no config dir, no environment variable and no settings file, so
+steps 3 and 5 are skipped entirely (its processes are *never* asked for their
+environment) and its identity is the executable path. Its "config dir" field
+carries the executable's own directory, which is what the instance is keyed on.
 
 This module only reads. Nothing here starts, stops or writes anything.
 """
@@ -56,6 +63,8 @@ SOURCE_PROCESS = "process"
 SOURCE_RUN_KEY = "run_key"
 SOURCE_SHORTCUT = "shortcut"
 SOURCE_SETTINGS_FILE = "settings_file"
+SOURCE_EXE_SCAN = "exe_scan"
+"""A ``github-exe`` executable found in a directory the manager already knows."""
 SOURCE_DECLARED = "declared"
 """Source (d) of PLAN.md section 6.1: instances declared in ``manager-config.json``."""
 
@@ -141,6 +150,10 @@ class _KindResolver:
         if product.strip().casefold().startswith(PRODUCT_NAME_PREFIX):
             # A future or renamed family member: keep it only if the name maps.
             return by_name
+        if by_name is not None and by_name.is_github_exe and not by_name.pe_product_name:
+            # A user-defined kind that declares no product name matches on the
+            # file name alone: we have nothing else to compare against.
+            return by_name
         # Same file name, different product: somebody else's executable.
         return None
 
@@ -180,7 +193,15 @@ def _config_dir_from_process(
     snapshot: ProcessSnapshot,
     kind: MonitorKind,
 ) -> tuple[Path, ConfigDirSource, dict[str, str]]:
-    """Resolve config dir: command line, then environment, then the default."""
+    """Resolve config dir: command line, then environment, then the default.
+
+    A ``github-exe`` kind never gets here past the first branch: it has no
+    config dir and no environment variable, so its "directory" is the one its
+    executable lives in and ``read_environ()`` is not called at all.
+    """
+    if kind.is_github_exe:
+        exe = snapshot.exe
+        return (exe.parent if exe is not None else Path()), "default", {}
     from_cmdline = parse_config_dir(snapshot.cmdline)
     if from_cmdline is not None:
         return from_cmdline, "cmdline", {}
@@ -189,10 +210,11 @@ def _config_dir_from_process(
     except (psutil.Error, OSError):
         # PLAN.md section 8: mark it instead of guessing.
         return kind.default_config_dir, "unknown", {}
-    raw = environ.get(kind.env_var)
+    env_var = kind.env_var
+    raw = environ.get(env_var) if env_var else None
     from_env = normalize_config_dir(raw) if raw else None
-    if from_env is not None:
-        return from_env, "env", {kind.env_var: str(from_env)}
+    if from_env is not None and env_var is not None:
+        return from_env, "env", {env_var: str(from_env)}
     return kind.default_config_dir, "default", {}
 
 
@@ -206,8 +228,11 @@ def settings_candidates(kind: MonitorKind, config_dir: Path, exe_path: Path | No
 
     ``config_dir`` is only searched when it differs from the kind default (the
     monitors skip it otherwise), then the executable's own directory, then the
-    default directory.
+    default directory. A ``github-exe`` kind has no settings file at all and
+    therefore no candidates.
     """
+    if not kind.has_config_dir:
+        return []
     default_dir = kind.default_config_dir
     candidates: list[Path] = []
     if _normcase(config_dir) != _normcase(default_dir):
@@ -311,6 +336,18 @@ def _drafts_from_run_entries(
         kind = resolve_kind(exe) or kinds.kind_for_exe_name(exe.name)
         if kind is None:
             continue
+        if kind.is_github_exe:
+            drafts.append(
+                _Draft(
+                    kind=kind,
+                    config_dir=exe.parent,
+                    config_dir_source="default",
+                    sources=[SOURCE_RUN_KEY],
+                    exe_path=exe,
+                    launch_args=tuple(args),
+                )
+            )
+            continue
         from_args = parse_config_dir(args)
         config_dir = from_args or kind.default_config_dir
         drafts.append(
@@ -328,8 +365,9 @@ def _drafts_from_run_entries(
 
 def shortcut_paths(exe_dirs: Iterable[Path]) -> list[Path]:
     """Legacy convention of the PowerShell updater: ``<exe> - <label>.lnk``."""
-    prefixes = tuple(f"{kind.exe_name.casefold()} - " for kind in kinds.all_kinds())
-    prefixes += tuple(f"{kind.exe_stem.casefold()} - " for kind in kinds.all_kinds())
+    family = kinds.usage_monitor_kinds()
+    prefixes = tuple(f"{kind.exe_name.casefold()} - " for kind in family)
+    prefixes += tuple(f"{kind.exe_stem.casefold()} - " for kind in family)
     found: list[Path] = []
     seen: set[str] = set()
     for directory in exe_dirs:
@@ -353,7 +391,7 @@ def _drafts_from_shortcuts(exe_dirs: Iterable[Path], resolve_kind: _KindResolver
         if target is None:
             continue
         kind = resolve_kind(target) or kinds.kind_for_exe_name(target.name)
-        if kind is None:
+        if kind is None or not kind.has_config_dir:
             continue
         from_args = parse_config_dir(args)
         drafts.append(
@@ -390,7 +428,7 @@ def kind_for_config_dir_name(name: str) -> MonitorKind | None:
     folded = name.casefold()
     best: MonitorKind | None = None
     best_length = 0
-    for kind in kinds.all_kinds():
+    for kind in kinds.usage_monitor_kinds():
         default_name = kind.default_config_dir.name.casefold()
         if default_name and folded.startswith(default_name) and len(default_name) > best_length:
             best, best_length = kind, len(default_name)
@@ -412,7 +450,7 @@ def _drafts_from_settings_files(exe_by_kind: Mapping[str, Path]) -> list[_Draft]
             if not _exists(child / SETTINGS_FILENAME):
                 continue
             kind = kind_for_config_dir_name(child.name)
-            if kind is None:
+            if kind is None or not kind.has_config_dir:
                 continue
             drafts.append(
                 _Draft(
@@ -421,6 +459,40 @@ def _drafts_from_settings_files(exe_by_kind: Mapping[str, Path]) -> list[_Draft]
                     config_dir_source="default",
                     sources=[SOURCE_SETTINGS_FILE],
                     exe_path=exe_by_kind.get(kind.key),
+                )
+            )
+    return drafts
+
+
+def _drafts_from_exe_scan(directories: Iterable[Path]) -> list[_Draft]:
+    """Source for ``github-exe`` kinds: their executable next to a known one.
+
+    A portable executable has no Run key of its own while it is not running and
+    no settings file to be found by name, so the only cheap way to see a
+    dormant one is to look for it where the manager is already looking: the
+    directories holding the executables discovery has already identified (the
+    ``Tools\\AI`` folders). Never a disk scan, same rule as the settings
+    discovery of PLAN.md section 1.5.
+    """
+    targets = kinds.github_exe_kinds()
+    if not targets:
+        return []
+    drafts: list[_Draft] = []
+    seen: set[tuple[str, str]] = set()
+    for directory in directories:
+        for kind in targets:
+            candidate = directory / kind.exe_name
+            key = (kind.key, _normcase(candidate))
+            if key in seen or not _exists(candidate):
+                continue
+            seen.add(key)
+            drafts.append(
+                _Draft(
+                    kind=kind,
+                    config_dir=directory,
+                    config_dir_source="default",
+                    sources=[SOURCE_EXE_SCAN],
+                    exe_path=candidate,
                 )
             )
     return drafts
@@ -442,6 +514,18 @@ def _drafts_from_declared(
             continue
         kind = kinds.KINDS.get(entry.kind.casefold())
         if kind is None:
+            continue
+        if kind.is_github_exe:
+            drafts.append(
+                _Draft(
+                    kind=kind,
+                    config_dir=entry.config_dir,
+                    config_dir_source="default",
+                    sources=[SOURCE_DECLARED],
+                    exe_path=entry.config_dir / kind.exe_name,
+                    label=entry.label,
+                )
+            )
             continue
         is_default = _normcase(entry.config_dir) == _normcase(kind.default_config_dir)
         source: ConfigDirSource = "default" if is_default else "cmdline"
@@ -490,8 +574,27 @@ def _running_drafts(resolve_kind: _KindResolver) -> list[_Draft]:
     return drafts
 
 
-def _finalize(draft: _Draft, run_entries: Mapping[str, str]) -> Instance:
-    suffix = config_dir_suffix(draft.config_dir, draft.kind.default_config_dir)
+def _github_exe_suffixes(drafts: Sequence[_Draft]) -> dict[tuple[str, str], str]:
+    """Instance suffixes for the ``github-exe`` drafts.
+
+    One copy of an executable is the normal case and gets the empty suffix, so
+    ``AgentMonitorForClaude.exe`` is simply ``agent-monitor-claude``. Two copies
+    of the same kind in different folders would otherwise share an id, so in
+    that case *every* copy is suffixed with the hash of its directory - the
+    same ``_<12 hex>`` shape the monitors use for their own config dirs.
+    """
+    by_kind: dict[str, list[_Draft]] = {}
+    for draft in drafts:
+        if draft.kind.is_github_exe:
+            by_kind.setdefault(draft.kind.key, []).append(draft)
+    suffixes: dict[tuple[str, str], str] = {}
+    for members in by_kind.values():
+        for draft in members:
+            suffixes[draft.key] = "" if len(members) == 1 else config_dir_suffix(draft.config_dir, Path())
+    return suffixes
+
+
+def _finalize(draft: _Draft, run_entries: Mapping[str, str], suffix: str) -> Instance:
     active, shadowed = _resolve_settings(settings_candidates(draft.kind, draft.config_dir, draft.exe_path))
     run_name = f"{draft.kind.run_key_base}{suffix}"
     autostart_command = draft.autostart_command
@@ -563,6 +666,18 @@ def discover(
         for draft in _drafts_from_settings_files(exe_by_kind):
             _merge(drafts, draft)
 
+        known_dirs: list[Path] = []
+        seen_dirs: set[str] = set()
+        for draft in drafts.values():
+            if draft.exe_path is None:
+                continue
+            directory = draft.exe_path.parent
+            if _normcase(directory) not in seen_dirs:
+                seen_dirs.add(_normcase(directory))
+                known_dirs.append(directory)
+        for draft in _drafts_from_exe_scan(known_dirs):
+            _merge(drafts, draft)
+
     exe_by_kind_all: dict[str, Path] = {}
     for draft in drafts.values():
         if draft.exe_path is not None:
@@ -572,7 +687,17 @@ def discover(
             _merge(drafts, draft)
 
     order = {kind.key: index for index, kind in enumerate(kinds.all_kinds())}
-    instances = [_finalize(draft, run_entries) for draft in drafts.values()]
+    suffixes = _github_exe_suffixes(list(drafts.values()))
+    instances = [
+        _finalize(
+            draft,
+            run_entries,
+            suffixes.get(draft.key, "")
+            if draft.kind.is_github_exe
+            else config_dir_suffix(draft.config_dir, draft.kind.default_config_dir),
+        )
+        for draft in drafts.values()
+    ]
     instances.sort(key=lambda instance: (order.get(instance.kind.key, 99), _normcase(instance.config_dir)))
     return instances
 
@@ -602,6 +727,8 @@ class RunningProcess:
 
     @property
     def instance_suffix(self) -> str:
+        if self.kind.is_github_exe:
+            return ""
         return config_dir_suffix(self.config_dir, self.kind.default_config_dir)
 
     @property

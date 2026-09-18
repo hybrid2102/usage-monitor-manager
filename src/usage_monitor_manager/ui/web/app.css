@@ -247,6 +247,23 @@ main {
   margin: 0;
 }
 
+/* Panels whose content is a table (kinds, profiles) span the whole grid. */
+.cards .panel.wide {
+  grid-column: 1 / -1;
+}
+
+table.grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table.grid th,
+table.grid td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
 .row {
   display: flex;
   align-items: center;

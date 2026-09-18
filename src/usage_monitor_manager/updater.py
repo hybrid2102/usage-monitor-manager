@@ -28,6 +28,7 @@ restarts both. And **every process operation goes through
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from collections.abc import Callable, Iterable, Sequence
@@ -39,6 +40,8 @@ from . import github, process_control, versions, watchdog
 from .integrity import IntegrityResult, authenticode_status, normalize_digest, parse_sidecar, sha256_file
 from .model import Instance, JsonDict, MonitorKind, ReleaseInfo, UpdatePlan
 from .versions import VersionStatus
+
+_log = logging.getLogger("umm.updater")
 
 __all__ = [
     "DEFAULT_POST_CHECK_DELAY",
@@ -473,6 +476,7 @@ def apply(  # noqa: PLR0911, PLR0912, PLR0915 - the sequence is the unit here
     """
     log = _Log(on_event)
     exe_path = plan.exe_path
+    _log.info("update %s -> %s at %s", plan.kind.key, plan.target.version, exe_path)
     swap = swapper if swapper is not None else FileSwapper(on_retry=lambda message: log("swap", message))
     download = download_path_for(exe_path)
     was_running = _running_instances(plan)

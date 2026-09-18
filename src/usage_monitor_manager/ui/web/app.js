@@ -19,6 +19,9 @@ const state = {
   watchdog: { count: 0, events: [] },
   archived: [],
   manager: null,
+  kinds: [],
+  profiles: [],
+  diag: { session: null, source: "", timer: null },
 };
 
 const WATCHDOG_LABELS = {
@@ -89,7 +92,7 @@ function setBusy(busy) {
 /* ---------------------------------------------------------- navigation */
 
 function goto(page, focus) {
-  if (!["dashboard", "updates", "settings", "manager"].includes(page)) page = "dashboard";
+  if (!["dashboard", "updates", "settings", "diag", "manager"].includes(page)) page = "dashboard";
   state.page = page;
   document.querySelectorAll(".page").forEach((section) => {
     section.classList.toggle("active", section.id === "page-" + page);
@@ -98,6 +101,7 @@ function goto(page, focus) {
     tab.classList.toggle("active", tab.dataset.page === page);
   });
   if (page === "manager") loadManager();
+  if (page === "diag") loadDiag();
   if (page === "updates") renderUpdates();
   if (page === "settings") openSettings(focus || settings.instanceId);
 }
@@ -448,6 +452,107 @@ async function rollback() {
   await refresh();
 }
 
+/* --------------------------------------------------------- diagnostics */
+
+/* PLAN.md section 9.7: one instance at a time runs with --verbose and its
+ * output lands in a file; this page starts and stops that mode, tails the log
+ * and assembles the block to paste in a GitHub issue. */
+
+async function loadDiag() {
+  const picker = $("diag-instance");
+  const current = picker.value;
+  picker.innerHTML = "";
+  state.rows.forEach((row) => {
+    const option = document.createElement("option");
+    option.value = row.id;
+    option.textContent = (row.label || row.kind_display || row.id) + (row.is_running ? " (in esecuzione)" : "");
+    picker.appendChild(option);
+  });
+  if (current) picker.value = current;
+  await refreshDiag();
+}
+
+async function refreshDiag() {
+  const lines = Number($("diag-lines").value) || 200;
+  const data = await call("diag_state", lines);
+  if (!data) return;
+  state.diag.session = data.session;
+  const source = $("diag-source");
+  const wanted = state.diag.source || (data.session ? data.session.log_path : data.manager_log);
+  source.innerHTML = "";
+  const options = [];
+  (data.logs || []).forEach((path) => options.push(path));
+  if (data.manager_log) options.push(data.manager_log);
+  options.forEach((path) => {
+    const option = document.createElement("option");
+    option.value = path;
+    option.textContent = path;
+    source.appendChild(option);
+  });
+  if (options.includes(wanted)) source.value = wanted;
+  state.diag.source = source.value;
+
+  $("diag-state").textContent = data.session
+    ? data.session.instance_id + " in modalita' diagnostica · " + data.session.log_path
+    : "nessuna istanza in modalita' diagnostica";
+  if (data.session && source.value === data.session.log_path) {
+    $("diag-log").textContent = (data.lines || []).join("\n");
+  } else {
+    const tail = await call("diag_log", source.value, lines);
+    if (tail) $("diag-log").textContent = (tail.lines || []).join("\n");
+  }
+}
+
+async function startDiag() {
+  const id = $("diag-instance").value;
+  if (!id) return;
+  setBusy(true);
+  const result = await call("diag_start", id);
+  setBusy(false);
+  if (result) log("diag-log", text(result.detail));
+  await refresh();
+  await loadDiag();
+}
+
+async function stopDiag() {
+  const id = (state.diag.session && state.diag.session.instance_id) || $("diag-instance").value;
+  if (!id) return;
+  setBusy(true);
+  const result = await call("diag_stop", id);
+  setBusy(false);
+  if (result) log("diag-log", text(result.detail));
+  await refresh();
+  await loadDiag();
+}
+
+async function copyDiagReport() {
+  const id = (state.diag.session && state.diag.session.instance_id) || $("diag-instance").value;
+  const lines = Number($("diag-lines").value) || 200;
+  const result = await call("diag_report", id, lines);
+  if (result && result.text) copyText(result.text, "diagnostica copiata negli appunti");
+}
+
+function copyText(value, message) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(value).then(
+      () => log("diag-log", message),
+      () => log("diag-log", "copia non riuscita")
+    );
+    return;
+  }
+  log("diag-log", "copia non disponibile in questa finestra");
+}
+
+function toggleFollow() {
+  if (state.diag.timer) {
+    clearInterval(state.diag.timer);
+    state.diag.timer = null;
+  }
+  if ($("diag-follow").checked) {
+    state.diag.timer = setInterval(refreshDiag, 2000);
+  }
+}
+
 /* ------------------------------------------------------------- manager */
 
 async function loadManager() {
@@ -470,7 +575,194 @@ async function loadManager() {
     $("pref-watchdog").checked = Boolean(config.preferences.watchdog_enabled);
     $("pref-auto-restart").checked = Boolean(config.preferences.auto_restart_crashed);
     $("pref-archive-keep").value = config.preferences.archive_keep;
+    $("pref-hotkey").value = config.preferences.hotkey || "";
+    $("pref-status-file").value = config.preferences.status_file || "";
+    $("hotkey-state").textContent = config.preferences.hotkey
+      ? "attiva al prossimo avvio della tray"
+      : "nessuna scorciatoia registrata";
+    $("status-file-state").textContent = config.preferences.status_file
+      ? "riscritto dopo ogni ciclo della tray"
+      : "disattivato";
   }
+  await loadKinds();
+  await loadProfiles();
+  await refreshManagerLog();
+}
+
+async function refreshManagerLog() {
+  const data = await call("get_manager_log", 200);
+  if (!data) return;
+  $("manager-log-path").textContent = data.path;
+  $("manager-log").textContent = (data.lines || []).join("\n");
+}
+
+/* ------------------------------------------------- kinds and profiles */
+
+async function loadKinds() {
+  const rows = await call("list_kinds");
+  if (!rows) return;
+  state.kinds = rows;
+  const body = $("kinds-body");
+  body.innerHTML = "";
+  rows.forEach((kind) => {
+    const tr = document.createElement("tr");
+    [kind.key, kind.family, kind.exe_name, kind.repo, kind.source].forEach((value) => {
+      const td = document.createElement("td");
+      td.textContent = text(value);
+      tr.appendChild(td);
+    });
+    const actions = document.createElement("td");
+    if (kind.source === "custom") {
+      const remove = document.createElement("button");
+      remove.className = "btn danger";
+      remove.textContent = "Rimuovi";
+      remove.addEventListener("click", () => removeKind(kind.key));
+      actions.appendChild(remove);
+    }
+    tr.appendChild(actions);
+    body.appendChild(tr);
+  });
+}
+
+async function addKind() {
+  const payload = {
+    key: $("kind-key").value,
+    display_name: $("kind-name").value || $("kind-key").value,
+    exe_name: $("kind-exe").value,
+    repo: $("kind-repo").value,
+    asset_pattern: $("kind-asset").value,
+    sha_sidecar: $("kind-sidecar").checked,
+  };
+  setBusy(true);
+  const result = await call("add_kind", payload);
+  setBusy(false);
+  if (!result) return;
+  $("kinds-state").textContent = result.ok ? "tipo aggiunto" : (result.problems || []).join(" · ");
+  if (result.ok) {
+    ["kind-key", "kind-name", "kind-exe", "kind-repo", "kind-asset"].forEach((id) => ($(id).value = ""));
+    await loadKinds();
+    await refresh();
+  }
+}
+
+async function removeKind(key) {
+  setBusy(true);
+  const result = await call("remove_kind", key);
+  setBusy(false);
+  $("kinds-state").textContent = result && result.removed ? "tipo rimosso" : "nessun tipo definito dall'utente";
+  await loadKinds();
+  await refresh();
+}
+
+async function loadProfiles() {
+  const rows = await call("list_profiles");
+  if (!rows) return;
+  state.profiles = rows;
+  const body = $("profiles-body");
+  body.innerHTML = "";
+  rows.forEach((profile) => {
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    name.textContent = profile.name;
+    const members = document.createElement("td");
+    members.textContent = (profile.instance_ids || []).join(", ") || "—";
+    const actions = document.createElement("td");
+    const apply = document.createElement("button");
+    apply.className = "btn primary";
+    apply.textContent = "Applica";
+    apply.addEventListener("click", () => applyProfile(profile.name));
+    const remove = document.createElement("button");
+    remove.className = "btn danger";
+    remove.textContent = "Rimuovi";
+    remove.addEventListener("click", () => deleteProfile(profile.name));
+    actions.appendChild(apply);
+    actions.appendChild(remove);
+    tr.appendChild(name);
+    tr.appendChild(members);
+    tr.appendChild(actions);
+    body.appendChild(tr);
+  });
+  const picker = $("profile-instances");
+  picker.innerHTML = "";
+  state.rows.forEach((row) => {
+    const option = document.createElement("option");
+    option.value = row.id;
+    option.textContent = row.label || row.kind_display || row.id;
+    picker.appendChild(option);
+  });
+}
+
+async function saveProfile() {
+  const name = $("profile-name").value.trim();
+  const ids = Array.from($("profile-instances").selectedOptions).map((option) => option.value);
+  if (!name || !ids.length) {
+    $("profiles-state").textContent = "servono un nome e almeno un'istanza";
+    return;
+  }
+  setBusy(true);
+  const result = await call("save_profile", name, ids);
+  setBusy(false);
+  $("profiles-state").textContent = result && result.ok ? "profilo salvato" : text(result && result.detail);
+  $("profile-name").value = "";
+  await loadProfiles();
+}
+
+async function deleteProfile(name) {
+  setBusy(true);
+  await call("delete_profile", name);
+  setBusy(false);
+  await loadProfiles();
+}
+
+async function applyProfile(name) {
+  const preview = await call("profile_plan", name);
+  if (preview && preview.ok && !confirm((preview.steps || []).join("\n"))) return;
+  setBusy(true);
+  const result = await call("apply_profile", name);
+  setBusy(false);
+  if (result) log("manager-log", "profilo " + name + ": " + (result.ok ? "applicato" : "con errori"));
+  await refresh();
+}
+
+/* ------------------------------------------------- hotkey, status file */
+
+async function saveHotkey(value) {
+  const result = await call("set_hotkey", value);
+  if (!result) return;
+  $("hotkey-state").textContent = result.ok
+    ? "salvata: attiva al prossimo avvio della tray"
+    : "non valida: " + text(result.detail);
+  if (result.ok) $("pref-hotkey").value = result.hotkey || "";
+}
+
+function captureHotkey() {
+  const field = $("pref-hotkey");
+  $("hotkey-state").textContent = "premi la combinazione…";
+  const onKey = (event) => {
+    event.preventDefault();
+    const key = event.key.toLowerCase();
+    if (["control", "alt", "shift", "meta"].includes(key)) return;
+    const parts = [];
+    if (event.ctrlKey) parts.push("ctrl");
+    if (event.altKey) parts.push("alt");
+    if (event.shiftKey) parts.push("shift");
+    if (event.metaKey) parts.push("win");
+    parts.push(key === " " ? "space" : key);
+    field.value = parts.join("+");
+    window.removeEventListener("keydown", onKey, true);
+    saveHotkey(field.value);
+  };
+  window.addEventListener("keydown", onKey, true);
+}
+
+async function saveStatusFile(value) {
+  const result = await call("set_status_file", value);
+  if (!result) return;
+  $("status-file-state").textContent = result.ok
+    ? value
+      ? "scritto in " + text(result.written)
+      : "disattivato"
+    : "non scritto: " + text(result.detail);
 }
 
 function renderToken(info) {
@@ -1390,7 +1682,7 @@ function onEvent(payload) {
   }
 }
 
-window.umm = { goto, onEvent, refresh, openSettings };
+window.umm = { goto, onEvent, refresh, openSettings, loadDiag, loadManager };
 
 /* ------------------------------------------------------------- wiring */
 
@@ -1440,6 +1732,31 @@ function wire() {
   $("pref-watchdog").addEventListener("change", (e) => setPreference("watchdog_enabled", e.target.checked));
   $("pref-auto-restart").addEventListener("change", (e) => setPreference("auto_restart_crashed", e.target.checked));
   $("pref-archive-keep").addEventListener("change", (e) => setPreference("archive_keep", Number(e.target.value)));
+
+  $("btn-diag-start").addEventListener("click", startDiag);
+  $("btn-diag-stop").addEventListener("click", stopDiag);
+  $("btn-diag-report").addEventListener("click", copyDiagReport);
+  $("btn-diag-refresh").addEventListener("click", refreshDiag);
+  $("btn-diag-copy").addEventListener("click", () => copyText($("diag-log").textContent, "log copiato"));
+  $("diag-follow").addEventListener("change", toggleFollow);
+  $("diag-source").addEventListener("change", (e) => {
+    state.diag.source = e.target.value;
+    refreshDiag();
+  });
+  $("btn-manager-log-refresh").addEventListener("click", refreshManagerLog);
+  $("btn-kind-add").addEventListener("click", addKind);
+  $("btn-profile-save").addEventListener("click", saveProfile);
+  $("btn-hotkey-capture").addEventListener("click", captureHotkey);
+  $("btn-hotkey-clear").addEventListener("click", () => {
+    $("pref-hotkey").value = "";
+    saveHotkey("");
+  });
+  $("pref-hotkey").addEventListener("change", (e) => saveHotkey(e.target.value));
+  $("btn-status-file-save").addEventListener("click", () => saveStatusFile($("pref-status-file").value));
+  $("btn-status-file-clear").addEventListener("click", () => {
+    $("pref-status-file").value = "";
+    saveStatusFile("");
+  });
 
   const hash = (window.location.hash || "").replace("#", "");
   goto(hash || "dashboard");

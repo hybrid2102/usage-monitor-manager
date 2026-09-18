@@ -18,14 +18,20 @@ import ctypes
 import json
 import subprocess
 import sys
+import threading
 import winreg
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from ctypes import wintypes
 from pathlib import Path
 from typing import Any, cast
 
 __all__ = [
     "ATTACH_PARENT_PROCESS",
+    "HOTKEY_MODIFIERS",
+    "HotkeyError",
+    "HotkeyListener",
+    "format_hotkey",
+    "parse_hotkey",
     "CREATE_NO_WINDOW",
     "DEFAULT_RUN_ROOT",
     "DETACHED_PROCESS",
@@ -661,3 +667,256 @@ def authenticode_status(path: Path | str) -> str:
     if code in (TRUST_E_SUBJECT_FORM_UNKNOWN, TRUST_E_PROVIDER_UNKNOWN):
         return "unavailable"
     return f"invalid(0x{code:08X})"
+
+
+# --------------------------------------------------------------------------- #
+# Global hotkey (PLAN.md section 9.14)
+# --------------------------------------------------------------------------- #
+
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+MOD_SHIFT = 0x0004
+MOD_WIN = 0x0008
+MOD_NOREPEAT = 0x4000
+WM_HOTKEY = 0x0312
+WM_QUIT = 0x0012
+WM_NULL = 0x0000
+ERROR_HOTKEY_ALREADY_REGISTERED = 1409
+HOTKEY_ID = 0xA17E
+"""Our hotkey id; unique inside this thread, which is all Windows requires."""
+
+HOTKEY_MODIFIERS: dict[str, int] = {
+    "ctrl": MOD_CONTROL,
+    "control": MOD_CONTROL,
+    "alt": MOD_ALT,
+    "shift": MOD_SHIFT,
+    "win": MOD_WIN,
+    "super": MOD_WIN,
+    "meta": MOD_WIN,
+    "cmd": MOD_WIN,
+}
+
+_MODIFIER_ORDER = (("ctrl", MOD_CONTROL), ("alt", MOD_ALT), ("shift", MOD_SHIFT), ("win", MOD_WIN))
+
+_NAMED_KEYS: dict[str, int] = {
+    "backspace": 0x08,
+    "tab": 0x09,
+    "enter": 0x0D,
+    "return": 0x0D,
+    "esc": 0x1B,
+    "escape": 0x1B,
+    "space": 0x20,
+    "pageup": 0x21,
+    "pgup": 0x21,
+    "pagedown": 0x22,
+    "pgdn": 0x22,
+    "end": 0x23,
+    "home": 0x24,
+    "left": 0x25,
+    "up": 0x26,
+    "right": 0x27,
+    "down": 0x28,
+    "insert": 0x2D,
+    "delete": 0x2E,
+    "del": 0x2E,
+}
+_NAMED_BY_CODE = {
+    0x08: "backspace",
+    0x09: "tab",
+    0x0D: "enter",
+    0x1B: "esc",
+    0x20: "space",
+    0x21: "pageup",
+    0x22: "pagedown",
+    0x23: "end",
+    0x24: "home",
+    0x25: "left",
+    0x26: "up",
+    0x27: "right",
+    0x28: "down",
+    0x2D: "insert",
+    0x2E: "delete",
+}
+
+
+class HotkeyError(RuntimeError):
+    """The combination is unparsable, or Windows refused to register it."""
+
+
+def parse_hotkey(text: str) -> tuple[int, int]:
+    """``"ctrl+alt+u"`` -> ``(MOD_CONTROL | MOD_ALT, 0x55)``.
+
+    Accepts any order and any spacing, ``ctrl``/``control``, ``win``/``super``/
+    ``meta``/``cmd``, the letters, the digits, ``f1``..``f24`` and the named
+    keys of :data:`_NAMED_KEYS`. At least one modifier is required: Windows
+    would happily register a bare letter and swallow it system-wide.
+
+    Raises:
+        HotkeyError: on an empty, duplicated, modifier-less or unknown combo.
+    """
+    parts = [part.strip().casefold() for part in str(text).replace("-", "+").split("+")]
+    parts = [part for part in parts if part]
+    if not parts:
+        raise HotkeyError("empty hotkey")
+    modifiers = 0
+    key: str | None = None
+    for part in parts:
+        flag = HOTKEY_MODIFIERS.get(part)
+        if flag is not None:
+            modifiers |= flag
+            continue
+        if key is not None:
+            raise HotkeyError(f"hotkey {text!r} names two keys ({key!r} and {part!r})")
+        key = part
+    if key is None:
+        raise HotkeyError(f"hotkey {text!r} has no key, only modifiers")
+    if not modifiers:
+        raise HotkeyError(f"hotkey {text!r} needs at least one modifier (ctrl, alt, shift or win)")
+    return modifiers, _virtual_key(key, text)
+
+
+def _virtual_key(key: str, original: str) -> int:
+    if len(key) == 1 and (key.isalpha() or key.isdigit()):
+        return ord(key.upper())
+    if key.startswith("f") and key[1:].isdigit():
+        number = int(key[1:])
+        if 1 <= number <= 24:  # noqa: PLR2004 - VK_F1..VK_F24
+            return 0x70 + number - 1
+    code = _NAMED_KEYS.get(key)
+    if code is None:
+        raise HotkeyError(f"hotkey {original!r}: unknown key {key!r}")
+    return code
+
+
+def format_hotkey(modifiers: int, virtual_key: int) -> str:
+    """The canonical spelling of a parsed combo (``ctrl+alt+u``)."""
+    parts = [name for name, flag in _MODIFIER_ORDER if modifiers & flag]
+    named = _NAMED_BY_CODE.get(virtual_key)
+    if named is not None:
+        parts.append(named)
+    elif 0x70 <= virtual_key <= 0x87:  # noqa: PLR2004 - VK_F1..VK_F24
+        parts.append(f"f{virtual_key - 0x70 + 1}")
+    else:
+        parts.append(chr(virtual_key).lower())
+    return "+".join(parts)
+
+
+def normalize_hotkey(text: str) -> str:
+    """Parse and re-format, so stored combos have one spelling.
+
+    Raises:
+        HotkeyError: see :func:`parse_hotkey`.
+    """
+    modifiers, virtual_key = parse_hotkey(text)
+    return format_hotkey(modifiers, virtual_key)
+
+
+class HotkeyListener:
+    """A system-wide hotkey on a thread of its own, in pure ctypes.
+
+    ``RegisterHotKey(None, id, modifiers, vk)`` binds the combination to the
+    *calling thread*, and ``WM_HOTKEY`` is then delivered to that thread's
+    message queue - which is why the registration, the ``GetMessageW`` loop and
+    the unregistration all have to happen on the same thread, and why stopping
+    means posting a message to it rather than setting a flag.
+
+    The Windows entry points are injectable so the tests can drive the whole
+    lifecycle (registration, a delivered hotkey, the conflict error and the
+    clean unregistration) with a fake ``user32``, without ever grabbing a
+    combination on the developer's machine.
+    """
+
+    def __init__(
+        self,
+        combo: str,
+        callback: Callable[[], None],
+        *,
+        user32: Any | None = None,
+        kernel32: Any | None = None,
+        get_last_error: Callable[[], int] | None = None,
+    ) -> None:
+        self.combo = combo
+        self.modifiers, self.virtual_key = parse_hotkey(combo)
+        self._callback = callback
+        self._user32 = user32 if user32 is not None else ctypes.WinDLL("user32", use_last_error=True)
+        self._kernel32 = kernel32 if kernel32 is not None else _kernel32
+        self._get_last_error = get_last_error if get_last_error is not None else (lambda: ctypes.get_last_error())
+        self._thread: threading.Thread | None = None
+        self._ready = threading.Event()
+        self._thread_id: int | None = None
+        self.error: str | None = None
+        self.registered = False
+
+    # -- lifecycle -----------------------------------------------------------
+
+    def start(self, timeout: float = 5.0) -> bool:
+        """Run the loop on a daemon thread; returns whether it registered.
+
+        On failure :attr:`error` carries the reason, which is what the UI
+        shows next to the preference field (a combination another application
+        already owns is the common case).
+        """
+        if self._thread is not None and self._thread.is_alive():
+            return self.registered
+        self._ready.clear()
+        self.error = None
+        self.registered = False
+        thread = threading.Thread(target=self.run, name="umm-hotkey", daemon=True)
+        self._thread = thread
+        thread.start()
+        self._ready.wait(timeout)
+        return self.registered
+
+    def run(self) -> None:
+        """Register, pump messages until asked to stop, always unregister."""
+        try:
+            self._thread_id = int(self._kernel32.GetCurrentThreadId())
+        except OSError as error:  # pragma: no cover - defensive
+            self.error = str(error)
+            self._ready.set()
+            return
+        if not self._user32.RegisterHotKey(None, HOTKEY_ID, self.modifiers | MOD_NOREPEAT, self.virtual_key):
+            code = self._get_last_error()
+            self.error = (
+                f"the combination {self.combo} is already registered by another application"
+                if code == ERROR_HOTKEY_ALREADY_REGISTERED
+                else f"cannot register {self.combo} (Windows error {code})"
+            )
+            self._ready.set()
+            return
+        self.registered = True
+        self._ready.set()
+        try:
+            self._pump()
+        finally:
+            self.registered = False
+            try:
+                self._user32.UnregisterHotKey(None, HOTKEY_ID)
+            except OSError:  # pragma: no cover - the thread is going away anyway
+                pass
+
+    def _pump(self) -> None:
+        message = wintypes.MSG()
+        while True:
+            result = int(self._user32.GetMessageW(ctypes.byref(message), None, 0, 0))
+            if result in (0, -1):
+                return
+            if int(message.message) == WM_HOTKEY:
+                try:
+                    self._callback()
+                except Exception:  # noqa: BLE001 - a bad callback must not kill the thread
+                    continue
+
+    def stop(self, timeout: float = 2.0) -> None:
+        """Post ``WM_QUIT`` to the loop and wait for the thread to finish."""
+        thread = self._thread
+        thread_id = self._thread_id
+        if thread is None or not thread.is_alive() or thread_id is None:
+            self._thread = None
+            return
+        try:
+            self._user32.PostThreadMessageW(thread_id, WM_QUIT, 0, 0)
+        except OSError:  # pragma: no cover - defensive
+            pass
+        thread.join(timeout)
+        self._thread = None

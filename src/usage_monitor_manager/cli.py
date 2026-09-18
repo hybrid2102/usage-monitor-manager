@@ -15,7 +15,14 @@ sha256 for (exit 4) instead of asking, and with ``--log FILE`` appends one JSON
 object per step so a scheduled run leaves an audit trail.
 ``umm status --json`` (section 9.11) is the statusline entry point: instances,
 the stored update bookkeeping and a watchdog pass, without a single network
-call unless ``--check`` is given.
+call unless ``--check`` is given; ``--write-file`` drops the same document on
+disk for a consumer that cannot afford to start Python at all.
+
+Phase 7 adds three more command groups: ``umm kind`` edits the registry of
+"portable exe from GitHub Releases" entries (section 9.9), ``umm diag``
+restarts one instance with ``--verbose`` and its output on a file
+(section 9.7), and ``umm profile`` applies a named set of instances
+(section 9.13).
 
 ``umm update`` prints the release notes *before* the download starts and then
 redraws a single progress line in place, so the changelog stays readable for
@@ -38,7 +45,7 @@ import re
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from . import __version__
 from .identity import normalize_config_dir
@@ -51,6 +58,9 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 
 __all__ = [
     "ASCII_MARKERS",
+    "build_plans",
+    "skipped_plans",
+    "format_kind_table",
     "EXIT_FAILED",
     "EXIT_NOT_IMPLEMENTED",
     "EXIT_NETWORK",
@@ -95,9 +105,27 @@ asked, and ``--allow-unverified`` opts back in explicitly.
 EXIT_UPDATES_AVAILABLE = 10
 """``umm check`` exit code when at least one update is available."""
 
-_KIND_CHOICES = ("claude", "copilot", "codex")
-_SKIP_CHOICES = ("claude", "copilot", "codex", "manager")
-"""``umm skip`` also accepts ``manager``: the manager skips its own releases."""
+
+def _kind_choices() -> tuple[str, ...]:
+    """The registered kind keys, custom ones included (PLAN.md section 9.9).
+
+    Read when the parser is built, which happens after
+    :func:`kinds.reload` in :func:`main`: a kind the user added with
+    ``umm kind add`` is a valid ``--kind`` value in the same breath.
+    """
+    from . import kinds as _kinds
+
+    return _kinds.kind_keys()
+
+
+def _skip_choices() -> tuple[str, ...]:
+    """``umm skip`` also accepts ``manager``: the manager skips its own releases."""
+    return (*_kind_choices(), "manager")
+
+
+_KIND_ACTIONS = ("list", "add", "remove")
+_DIAG_ACTIONS = ("start", "stop", "show")
+_PROFILE_ACTIONS = ("list", "add", "remove", "apply", "show")
 _TOKEN_ACTIONS = ("set", "clear", "status")
 _ARCHIVE_ACTIONS = ("list", "prune")
 _PROCESS_COMMANDS = ("restart", "stop", "start")
@@ -115,7 +143,7 @@ def _add_selection(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--kind",
         action="append",
-        choices=_KIND_CHOICES,
+        choices=_kind_choices(),
         metavar="KEY",
         help="act on every instance of this kind (repeatable)",
     )
@@ -161,7 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--kind",
         action="append",
-        choices=_KIND_CHOICES,
+        choices=_kind_choices(),
         metavar="KEY",
         help="limit the check to this kind (repeatable)",
     )
@@ -178,7 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument(
         "--kind",
         action="append",
-        choices=_KIND_CHOICES,
+        choices=_kind_choices(),
         metavar="KEY",
         help="update this kind (repeatable)",
     )
@@ -204,7 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
     rollback.add_argument(
         "--kind",
         action="append",
-        choices=_KIND_CHOICES,
+        choices=_kind_choices(),
         metavar="KEY",
         required=True,
         help="roll back this kind's executable (repeatable)",
@@ -223,7 +251,7 @@ def build_parser() -> argparse.ArgumentParser:
     archive.add_argument(
         "--kind",
         action="append",
-        choices=_KIND_CHOICES,
+        choices=_kind_choices(),
         metavar="KEY",
         help="limit to this kind (repeatable)",
     )
@@ -238,10 +266,10 @@ def build_parser() -> argparse.ArgumentParser:
         skip.add_argument(
             "--kind",
             action="append",
-            choices=_SKIP_CHOICES,
+            choices=_skip_choices(),
             metavar="KEY",
             required=True,
-            help="claude | copilot | codex | manager (repeatable)",
+            help="a kind key or 'manager' (repeatable)",
         )
         _add_json(skip)
 
@@ -274,7 +302,52 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="health summary for scripts and statuslines")
     status.add_argument("--check", action="store_true", help="also ask GitHub (the default is offline)")
+    status.add_argument(
+        "--write-file",
+        nargs="?",
+        const="",
+        metavar="PATH",
+        dest="write_file",
+        help="also write the JSON document to PATH (default: %%LOCALAPPDATA%%\\UsageMonitorManager\\status.json)",
+    )
     _add_json(status)
+
+    kind = subparsers.add_parser("kind", help="inspect or edit the kind registry (PLAN.md section 9.9)")
+    kind.add_argument("action", choices=_KIND_ACTIONS)
+    kind.add_argument("key", nargs="?", metavar="KEY", help="for add/remove: the kind key")
+    kind.add_argument("--display-name", metavar="NAME", help="for add: the label shown in the UI")
+    kind.add_argument("--exe-name", metavar="FILE", help="for add: the executable file name (no path)")
+    kind.add_argument("--repo", metavar="OWNER/NAME", help="for add: the GitHub repository publishing the releases")
+    kind.add_argument("--asset-pattern", metavar="NAME", help="for add: the release asset (default: the exe name)")
+    kind.add_argument("--sha-sidecar", action="store_true", help="for add: the release publishes a .sha256 sidecar")
+    kind.add_argument("--pe-product-name", metavar="NAME", help="for add: the PE ProductName to double-check against")
+    _add_json(kind)
+
+    diag = subparsers.add_parser("diag", help="run one instance with --verbose and capture its output")
+    diag.add_argument("action", choices=_DIAG_ACTIONS)
+    diag.add_argument("--instance", metavar="ID", help="instance id (see 'umm list')")
+    diag.add_argument("--lines", type=int, default=200, metavar="N", help="for show: how many log lines (default 200)")
+    diag.add_argument("--dry-run", action="store_true", help="print what would happen, change nothing")
+    _add_json(diag)
+
+    profile = subparsers.add_parser("profile", help="named sets of instances (PLAN.md section 9.13)")
+    profile.add_argument("action", choices=_PROFILE_ACTIONS)
+    profile.add_argument("name", nargs="?", metavar="NAME", help="the profile name")
+    profile.add_argument(
+        "--instance",
+        action="append",
+        dest="instance_ids",
+        metavar="ID",
+        help="for add: an instance id of the profile (repeatable)",
+    )
+    profile.add_argument("--yes", action="store_true", help="for apply: do not ask for confirmation")
+    profile.add_argument("--dry-run", action="store_true", help="for apply: print the plan, change nothing")
+    profile.add_argument(
+        "--no-stop-others",
+        action="store_true",
+        help="for apply: only start the profile's instances, stop nothing",
+    )
+    _add_json(profile)
 
     subparsers.add_parser("tray", help="run the tray icon (the default when started with no arguments)")
 
@@ -651,7 +724,7 @@ def format_check_table(plans: Sequence[UpdatePlan], skipped: Sequence[str] = ())
     )
 
 
-def _build_plans(kinds: Sequence[str] | None, *, prerelease: bool) -> list[UpdatePlan]:
+def build_plans(kinds: Sequence[str] | None, *, prerelease: bool) -> list[UpdatePlan]:
     from . import manager_config
     from .discovery import discover
     from .updater import plan_updates
@@ -667,7 +740,7 @@ def _build_plans(kinds: Sequence[str] | None, *, prerelease: bool) -> list[Updat
     )
 
 
-def _skipped_plans(plans: Sequence[UpdatePlan]) -> list[UpdatePlan]:
+def skipped_plans(plans: Sequence[UpdatePlan]) -> list[UpdatePlan]:
     """The plans whose pending tag the user asked never to be offered again."""
     from . import manager_config
     from .updater import plan_status
@@ -687,12 +760,12 @@ def _cmd_check(args: argparse.Namespace) -> int:
     from .versions import VersionStatus
 
     try:
-        plans = _build_plans(args.kind, prerelease=bool(args.prerelease))
+        plans = build_plans(args.kind, prerelease=bool(args.prerelease))
     except GitHubError as error:
         print(f"umm check: {error}", file=sys.stderr)
         return EXIT_NETWORK
 
-    skipped = [] if args.include_skipped else _skipped_plans(plans)
+    skipped = [] if args.include_skipped else skipped_plans(plans)
     ignored = {_normcase(plan.exe_path) for plan in skipped}
     if args.json:
         payload: list[JsonDict] = []
@@ -799,7 +872,7 @@ def _cmd_update(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
         parser.error("update: pick --kind KEY or --all")
 
     try:
-        plans = _build_plans(args.kind, prerelease=bool(args.prerelease))
+        plans = build_plans(args.kind, prerelease=bool(args.prerelease))
     except GitHubError as error:
         print(f"umm update: {error}", file=sys.stderr)
         return EXIT_NETWORK
@@ -807,7 +880,7 @@ def _cmd_update(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
     outdated = [p for p in plans if plan_status(p) is VersionStatus.UPDATE_AVAILABLE]
     step_log = _StepLog(getattr(args, "log", None))
     if not args.include_skipped:
-        ignored = {_normcase(plan.exe_path) for plan in _skipped_plans(plans)}
+        ignored = {_normcase(plan.exe_path) for plan in skipped_plans(plans)}
         for plan in [p for p in outdated if _normcase(p.exe_path) in ignored]:
             message = f"{plan.kind.key}: {plan.target.tag} skipped by the user (--include-skipped to override)"
             step_log.write({"kind": plan.kind.key, "step": "skip", "message": message})
@@ -1061,7 +1134,7 @@ def _repo_and_tag(key: str, *, prerelease: bool) -> tuple[str, str | None, str]:
         state = check_self(include_prerelease=prerelease)
         return MANAGER_REPO, state.tag, "Manager"
     kind = get_kind(key)
-    plans = _build_plans([key], prerelease=prerelease)
+    plans = build_plans([key], prerelease=prerelease)
     tag = plans[0].target.tag if plans else None
     return kind.repo, tag, kind.display_name
 
@@ -1244,92 +1317,33 @@ def _cmd_post_update(pid: int) -> int:
 
 
 def _status_payload(*, check: bool) -> JsonDict:
-    """Instances, the stored update bookkeeping and one watchdog pass.
+    """The health document; the builder itself lives in :mod:`.status_file`.
 
-    Offline by default: a statusline calls this every few seconds, and the
-    stored ``last_check`` of the scheduler already says what GitHub answered.
-    ``--check`` asks for real.
+    It moved out of the CLI when the tray started writing the same document to
+    ``status.json`` after every cycle (PLAN.md section 9.11): both callers need
+    it, and only one of them is a command line.
     """
-    from datetime import UTC, datetime
+    from .status_file import build_status
 
-    from . import manager_config, watchdog
-    from .discovery import discover
-    from .github import GitHubError
-    from .self_update import MANAGER_REPO, check_self
-    from .updater import plan_status
-    from .versions import VersionStatus, display_version
-
-    config = manager_config.load()
-    instances = discover()
-    rows = [
-        {
-            "id": instance.instance_id,
-            "kind": instance.kind.key,
-            "label": instance.label or config.label_for(instance.kind.key, instance.config_dir),
-            "config_dir": str(instance.config_dir),
-            "exe_path": None if instance.exe_path is None else str(instance.exe_path),
-            "local_version": display_version(instance.exe_version),
-            "is_running": instance.is_running,
-            "pid": None if instance.processes is None else instance.processes.app_pid,
-        }
-        for instance in instances
-    ]
-
-    updates: JsonDict = {
-        "checked": bool(check),
-        "last_check": dict(config.last_check),
-        "skipped_versions": dict(config.skipped_versions),
-        "plans": [],
-        "available": 0,
-        "error": None,
-    }
-    self_state: JsonDict | None = None
-    if check:
-        try:
-            plans = _build_plans(None, prerelease=config.preferences.include_prerelease)
-        except GitHubError as error:
-            updates["error"] = str(error)
-            plans = []
-        ignored = {_normcase(plan.exe_path) for plan in _skipped_plans(plans)}
-        updates["plans"] = [
-            {
-                "kind": plan.kind.key,
-                "exe_path": str(plan.exe_path),
-                "current_version": display_version(plan.current_version),
-                "target_version": plan.target.version,
-                "tag": plan.target.tag,
-                "status": "skipped" if _normcase(plan.exe_path) in ignored else str(plan_status(plan)),
-            }
-            for plan in plans
-        ]
-        updates["available"] = sum(
-            1
-            for plan in plans
-            if plan_status(plan) is VersionStatus.UPDATE_AVAILABLE and _normcase(plan.exe_path) not in ignored
-        )
-        self_state = check_self(
-            include_prerelease=config.include_prerelease_for(MANAGER_REPO),
-            skipped_tag=config.skipped_versions.get(MANAGER_REPO),
-        ).to_dict()
-
-    dog = watchdog.Watchdog()
-    findings = dog.poll()
-
-    return {
-        "version": __version__,
-        "generated_at": datetime.now(tz=UTC).isoformat(),
-        "instances": rows,
-        "running": sum(1 for row in rows if row["is_running"]),
-        "updates": updates,
-        "self_update": self_state,
-        "watchdog": findings.to_dict(),
-    }
+    return build_status(check=check)
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
+    from .status_file import write_status_file
+
     payload = _status_payload(check=bool(args.check))
+    written: Path | None = None
+    write_file = getattr(args, "write_file", None)
+    if write_file is not None:
+        try:
+            written = write_status_file(payload, write_file or None)
+        except OSError as error:
+            print(f"status file not written: {error}")
+            return EXIT_FAILED
     if args.json:
         print(json.dumps(payload, indent=2))
+        if written is not None:
+            print(f"written to {written}", file=sys.stderr)
         return EXIT_OK
     instances = payload["instances"]
     print(f"Usage Monitor Manager {payload['version']} - {payload['running']}/{len(instances)} running")
@@ -1348,7 +1362,259 @@ def _cmd_status(args: argparse.Namespace) -> int:
             print(f"  ! {event['type']}: {event['detail']}")
     else:
         print("watchdog: nothing anomalous")
+    if written is not None:
+        print(f"status file: {written}")
     return EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# umm kind (PLAN.md section 9.9)
+# --------------------------------------------------------------------------- #
+
+
+def format_kind_table(rows: Sequence[JsonDict]) -> str:
+    """``umm kind list`` as a table: key, family, exe, repo, source."""
+    headers = ("KEY", "FAMILY", "DISPLAY NAME", "EXE", "REPO", "SOURCE")
+    body = [
+        (
+            str(row.get("key", "")),
+            str(row.get("family", "")),
+            str(row.get("display_name", "")),
+            str(row.get("exe_name", "")),
+            str(row.get("repo", "")),
+            str(row.get("source", "")) + ("" if row.get("disabled_reason") is None else " (disabled)"),
+        )
+        for row in rows
+    ]
+    widths = [
+        max(len(headers[index]), *(len(line[index]) for line in body)) if body else len(headers[index])
+        for index in range(len(headers))
+    ]
+    lines = ["  ".join(header.ljust(widths[index]) for index, header in enumerate(headers)).rstrip()]
+    for line in body:
+        lines.append("  ".join(cell.ljust(widths[index]) for index, cell in enumerate(line)).rstrip())
+    return "\n".join(lines)
+
+
+def _cmd_kind(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from . import kinds as kind_registry
+    from . import manager_config
+
+    action = str(args.action)
+    if action == "list":
+        rows = [kind.to_dict() for kind in kind_registry.all_kinds()]
+        if args.json:
+            print(json.dumps(rows, indent=2))
+        else:
+            print(format_kind_table(rows))
+        return EXIT_OK
+
+    key = (args.key or "").strip()
+    if not key:
+        parser.error(f"umm kind {action} needs a KEY")
+
+    if action == "remove":
+        removed = kind_registry.remove_custom_kind(key)
+        payload = {"key": key, "removed": removed}
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        elif removed:
+            print(f"kind {key} removed")
+        else:
+            print(f"no user-defined kind {key} (built-in kinds cannot be removed)")
+        return EXIT_OK if removed else EXIT_NO_MATCH
+
+    if not args.exe_name or not args.repo:
+        parser.error("umm kind add needs --exe-name and --repo")
+    entry = manager_config.CustomKind(
+        key=key.casefold(),
+        display_name=(args.display_name or key).strip(),
+        exe_name=str(args.exe_name).strip(),
+        repo=str(args.repo).strip(),
+        asset_pattern=(args.asset_pattern or "").strip(),
+        sha_sidecar=bool(args.sha_sidecar),
+        pe_product_name=(args.pe_product_name or None),
+    )
+    problems = kind_registry.add_custom_kind(entry)
+    payload = {"key": entry.key, "added": not problems, "problems": problems, "kind": entry.to_dict()}
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    elif problems:
+        for problem in problems:
+            print(f"! {problem}")
+    else:
+        print(f"kind {entry.key} added ({entry.exe_name} from {entry.repo})")
+    return EXIT_FAILED if problems else EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# umm diag (PLAN.md section 9.7)
+# --------------------------------------------------------------------------- #
+
+
+def _diag_instance(instance_id: str | None) -> Instance | None:
+    """The instance ``--instance`` selects, or the recorded diagnostic one."""
+    from . import diag
+    from .discovery import discover
+
+    instances = discover()
+    if not instance_id:
+        session = diag.read_state()
+        instance_id = None if session is None else session.instance_id
+    if not instance_id:
+        return instances[0] if len(instances) == 1 else None
+    matches = select_instances(instances, instance_id=instance_id)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _cmd_diag(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from . import diag
+
+    action = str(args.action)
+    if action == "show":
+        session = diag.read_state()
+        lines = [] if session is None else diag.tail(session.log_path, max(1, int(args.lines)))
+        payload = {
+            "session": None if session is None else session.to_dict(),
+            "lines": lines,
+            "manager_log": str(diag.manager_log_path()),
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+            return EXIT_OK
+        if session is None:
+            print("no instance is running in diagnostic mode")
+            print(f"manager log: {diag.manager_log_path()}")
+            return EXIT_OK
+        print(f"{session.instance_id} in diagnostic mode since {session.started_at or '?'}")
+        print(f"log: {session.log_path}")
+        for line in lines:
+            print(line)
+        return EXIT_OK
+
+    instance = _diag_instance(args.instance)
+    if instance is None:
+        print("no single instance selected: pass --instance ID (see 'umm list')")
+        return EXIT_NO_MATCH
+
+    if action == "start":
+        if args.dry_run:
+            for line in diag.describe_start(instance):
+                print(line)
+            return EXIT_OK
+        result = diag.start_diagnostics(instance, on_event=None if args.json else _process_event_printer)
+    else:
+        if args.dry_run:
+            print(process_control_describe_stop(instance))
+            print("would start it again without --verbose")
+            return EXIT_OK
+        result = diag.stop_diagnostics(instance, on_event=None if args.json else _process_event_printer)
+
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(f"{result.instance_id}: {result.detail}")
+        if result.log_path is not None and action == "start":
+            print(f"log: {result.log_path}")
+    return EXIT_OK if result.ok else EXIT_FAILED
+
+
+def process_control_describe_stop(instance: Instance) -> str:
+    """Thin wrapper so the diag dry-run reads like the update dry-run."""
+    from .process_control import describe_stop
+
+    return describe_stop(instance)
+
+
+def _process_event_printer(event: Any) -> None:
+    print(f"  {event.phase}: {event.message}")
+
+
+# --------------------------------------------------------------------------- #
+# umm profile (PLAN.md section 9.13)
+# --------------------------------------------------------------------------- #
+
+
+def _cmd_profile(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:  # noqa: PLR0911 - one branch per action
+    from . import manager_config, profiles
+    from .discovery import discover
+
+    action = str(args.action)
+    if action == "list":
+        rows = [profile.to_dict() for profile in profiles.list_profiles()]
+        if args.json:
+            print(json.dumps(rows, indent=2))
+        elif rows:
+            for row in rows:
+                print(f"{row['name']}: {', '.join(row['instance_ids']) or '(empty)'}")
+        else:
+            print("no launch profile configured")
+        return EXIT_OK
+
+    name = (args.name or "").strip()
+    if not name:
+        parser.error(f"umm profile {action} needs a NAME")
+
+    if action == "add":
+        raw_ids: list[object] = list(args.instance_ids or [])
+        ids = [str(item).strip() for item in raw_ids if str(item).strip()]
+        if not ids:
+            parser.error("umm profile add needs at least one --instance ID")
+        profile = manager_config.Profile(name=name, instance_ids=tuple(dict.fromkeys(ids)))
+        manager_config.upsert_profile(profile)
+        if args.json:
+            print(json.dumps(profile.to_dict(), indent=2))
+        else:
+            print(f"profile {name}: {', '.join(profile.instance_ids)}")
+        return EXIT_OK
+
+    if action == "remove":
+        removed = manager_config.remove_profile(name)
+        if args.json:
+            print(json.dumps({"name": name, "removed": removed}, indent=2))
+        else:
+            print(f"profile {name} removed" if removed else f"no profile {name}")
+        return EXIT_OK if removed else EXIT_NO_MATCH
+
+    profile = profiles.resolve(name)
+    if profile is None:
+        print(f"no profile {name} (see 'umm profile list')")
+        return EXIT_NO_MATCH
+    plan = profiles.plan(profile, discover(), stop_others=not bool(args.no_stop_others))
+
+    if action == "show":
+        if args.json:
+            print(json.dumps(plan.to_dict(), indent=2))
+        else:
+            for line in profiles.describe(plan):
+                print(line)
+        return EXIT_OK
+
+    if args.dry_run:
+        lines = profiles.describe(plan)
+        if args.json:
+            print(json.dumps({**plan.to_dict(), "dry_run": True, "steps": lines}, indent=2))
+        else:
+            for line in lines:
+                print(line)
+        return EXIT_OK
+
+    if plan.is_empty:
+        print(f"profile {name}: nothing to do")
+        return EXIT_OK
+    if not args.yes:
+        for line in profiles.describe(plan):
+            print(line)
+        if not _confirm(f"apply profile {name}?"):
+            print("cancelled")
+            return EXIT_OK
+    result = profiles.apply_plan(plan, on_event=None if args.json else _process_event_printer)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        for item in (*result.stops, *result.starts):
+            print(f"{item.instance_id}: {item.detail}")
+    return EXIT_OK if result.ok else EXIT_FAILED
 
 
 # --------------------------------------------------------------------------- #
@@ -1648,6 +1914,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
     _attach_console_if_frozen(raw_args)
     reconfigure_stdout()
+    from . import diag
+    from . import kinds as kind_registry
+
+    # The user-defined kinds must be in the registry before the parser is
+    # built: they are valid --kind values (PLAN.md section 9.9).
+    for problem in kind_registry.reload():
+        print(f"manager-config.json: {problem}", file=sys.stderr)
+    diag.setup_manager_logging()
     parser = build_parser()
     raw = raw_args
     # PLAN.md section 6.5 writes the autostart command as `"<exe>" --tray`.
@@ -1679,6 +1953,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_self_update(args)
     if args.command == "status":
         return _cmd_status(args)
+    if args.command == "kind":
+        return _cmd_kind(args, parser)
+    if args.command == "diag":
+        return _cmd_diag(args, parser)
+    if args.command == "profile":
+        return _cmd_profile(args, parser)
     if args.command == "config":
         return _cmd_config(args)
     if args.command == "import-legacy":

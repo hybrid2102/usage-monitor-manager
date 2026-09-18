@@ -110,6 +110,8 @@ def test_menu_reproduces_the_plan() -> None:
         "Riavvia tutte",
         "Ferma tutte",
         "Avvia mancanti",
+        "Profili",
+        "  Nessun profilo [disabled]",
         "---",
         f"Controlla aggiornamenti (ultimo: {expected_time})",
         "Apri Manager\u2026",

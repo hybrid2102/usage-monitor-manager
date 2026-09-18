@@ -81,6 +81,7 @@ class Control:
     mutex_probes: int = 0
     slept: list[float] = field(default_factory=lambda: [])
     spawned: list[tuple[tuple[str, ...], Mapping[str, str], Path]] = field(default_factory=lambda: [])
+    spawn_logs: list[Path | None] = field(default_factory=lambda: [])
     spawn_pid: int = 4242
     spawn_error: BaseException | None = None
     discovered: list[Instance] = field(default_factory=lambda: [])
@@ -106,10 +107,17 @@ class Control:
     def sleep(self, seconds: float) -> None:
         self.slept.append(seconds)
 
-    def spawn(self, argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> int:
+    def spawn(
+        self,
+        argv: Sequence[str],
+        env: Mapping[str, str],
+        cwd: Path,
+        log_path: Path | None = None,
+    ) -> int:
         if self.spawn_error is not None:
             raise self.spawn_error
         self.spawned.append((tuple(argv), dict(env), cwd))
+        self.spawn_logs.append(log_path)
         return self.spawn_pid
 
     def discover(self, include_dormant: bool = True) -> list[Instance]:
@@ -505,7 +513,12 @@ def test_restart_stops_everything_before_starting_anything(
 
     order: list[str] = []
 
-    def tracking_spawn(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> int:
+    def tracking_spawn(
+        argv: Sequence[str],
+        env: Mapping[str, str],
+        cwd: Path,
+        log_path: Path | None = None,
+    ) -> int:
         order.append(f"start:{argv[-1]}")
         return control.spawn(argv, env, cwd)
 

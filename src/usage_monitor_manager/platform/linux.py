@@ -160,3 +160,45 @@ def no_window_popen_kwargs() -> dict[str, Any]:
 def authenticode_status(path: Path | str) -> str:
     """No Authenticode on Linux: the caller treats this as information only."""
     return "unavailable"
+
+
+# --------------------------------------------------------------------------- #
+# Global hotkey: no equivalent in the stub (PLAN.md section 9.12)
+# --------------------------------------------------------------------------- #
+
+HOTKEY_MODIFIERS: dict[str, int] = {}
+
+
+class HotkeyError(RuntimeError):
+    """Raised by :func:`parse_hotkey` on this platform: nothing to bind to."""
+
+
+def parse_hotkey(text: str) -> tuple[int, int]:
+    """Always raises: a global hotkey needs a display server integration."""
+    raise HotkeyError(f"global hotkeys are not implemented on this platform ({text!r})")
+
+
+def format_hotkey(modifiers: int, virtual_key: int) -> str:
+    """Round-trip helper kept for signature parity with the Windows backend."""
+    return f"{modifiers}+{virtual_key}"
+
+
+def normalize_hotkey(text: str) -> str:
+    """Always raises, see :func:`parse_hotkey`."""
+    raise HotkeyError(f"global hotkeys are not implemented on this platform ({text!r})")
+
+
+class HotkeyListener:
+    """Signature-compatible stub that never registers anything."""
+
+    def __init__(self, combo: str, callback: object, **_ignored: object) -> None:
+        self.combo = combo
+        self._callback = callback
+        self.registered = False
+        self.error = "global hotkeys are not implemented on this platform"
+
+    def start(self, timeout: float = 5.0) -> bool:
+        return False
+
+    def stop(self, timeout: float = 2.0) -> None:
+        return None

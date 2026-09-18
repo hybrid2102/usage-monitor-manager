@@ -9,8 +9,15 @@ import pytest
 from usage_monitor_manager import kinds
 
 
-def test_three_kinds_registered() -> None:
-    assert [k.key for k in kinds.all_kinds()] == ["claude", "copilot", "codex"]
+def test_builtin_kinds_registered() -> None:
+    assert [k.key for k in kinds.all_kinds()] == [
+        "claude",
+        "copilot",
+        "codex",
+        "agent-monitor-claude",
+    ]
+    assert [k.key for k in kinds.usage_monitor_kinds()] == ["claude", "copilot", "codex"]
+    assert [k.key for k in kinds.github_exe_kinds()] == ["agent-monitor-claude"]
 
 
 @pytest.mark.parametrize(
@@ -54,7 +61,7 @@ def test_kind_fields(key: str, env_var: str, dir_name: str, repo: str, exe: str,
 
 
 def test_product_names_and_bases() -> None:
-    for kind in kinds.all_kinds():
+    for kind in kinds.usage_monitor_kinds():
         assert kind.pe_product_name == f"Usage Monitor for {kind.display_name}"
         assert kind.mutex_base == f"{kind.exe_stem}_SingleInstance"
         assert kind.run_key_base == kind.exe_stem

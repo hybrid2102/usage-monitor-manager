@@ -27,11 +27,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from .. import __version__, legacy, manager_config, platform
+from .. import __version__, diag, legacy, manager_config, platform
 from ..model import JsonDict
 from ..scheduler import UpdateScheduler
 from ..watchdog import Watchdog
 from .window import JsApi
+
+_log = diag.get_logger("tray")
 
 __all__ = [
     "ICON_SIZE",
@@ -260,14 +262,29 @@ def _last_check_text(last_check: str | None) -> str:
     return f"Controlla aggiornamenti (ultimo: {stamp:%H:%M})"
 
 
+def _profile_submenu(profiles: Sequence[JsonDict]) -> tuple[MenuEntry, ...]:
+    """The "Profili" submenu of PLAN.md section 9.13, one entry per profile."""
+    if not profiles:
+        return (MenuEntry("Nessun profilo", None, enabled=False),)
+    entries: list[MenuEntry] = []
+    for profile in profiles:
+        name = str(profile.get("name", ""))
+        members = profile.get("instance_ids")
+        count = len(cast("list[object]", members)) if isinstance(members, list) else 0
+        entries.append(MenuEntry(f"{name} ({count})", "apply_profile", (name,)))
+    return tuple(entries)
+
+
 def build_menu_spec(
     rows: Sequence[JsonDict],
     update_state: JsonDict | None = None,
     version: str = __version__,
+    profiles: Sequence[JsonDict] = (),
 ) -> tuple[MenuEntry, ...]:
     """The whole menu of PLAN.md section 6.6 as a tree of :class:`MenuEntry`.
 
-    ``rows`` are the dictionaries :meth:`JsApi.list_instances` returns.
+    ``rows`` are the dictionaries :meth:`JsApi.list_instances` returns,
+    ``profiles`` the ones :meth:`JsApi.list_profiles` returns.
     """
     state = update_state or {}
     entries: list[MenuEntry] = []
@@ -286,6 +303,7 @@ def build_menu_spec(
             MenuEntry("Riavvia tutte", "restart_all", enabled=any_running),
             MenuEntry("Ferma tutte", "stop_all", enabled=any_running),
             MenuEntry("Avvia mancanti", "start_missing", enabled=any_stopped),
+            MenuEntry("Profili", None, submenu=_profile_submenu(profiles)),
             SEPARATOR,
             MenuEntry(
                 _last_check_text(state.get("last_check")),
@@ -382,7 +400,9 @@ class TrayApp:
 
     def on_watchdog_events(self, events: Sequence[Any]) -> None:
         """One toast per anomaly (PLAN.md section 9.2), then redraw the icon."""
+        self.write_status_file()
         for event in events:
+            _log.info("watchdog %s: %s", event.type, event.detail)
             if event.type == "crashed":
                 text = f"{event.instance_id} si e' chiuso da solo"
                 text += " ed e' stato riavviato" if event.repaired else "; apri il manager per riavviarlo"
@@ -402,10 +422,36 @@ class TrayApp:
         findings = self._watchdog.state
         for row in self._rows:
             row["watchdog"] = findings.status_of(str(row.get("id", "")))
+        self.write_status_file()
         return self._rows
 
+    def write_status_file(self) -> Path | None:
+        """Rewrite ``status.json`` when the user asked for one (section 9.11).
+
+        Called after every discovery, watchdog and scheduler cycle. A failure
+        is logged and swallowed: a status file nobody can write is not a reason
+        to stop managing instances.
+        """
+        path = manager_config.load(self._config_path).preferences.status_file
+        if not path:
+            return None
+        from ..status_file import build_status, write_status_file
+
+        try:
+            return write_status_file(build_status(check=False), path)
+        except Exception as error:  # noqa: BLE001 - never load-bearing
+            _log.warning("status file not written: %s", error)
+            return None
+
     def spec(self) -> tuple[MenuEntry, ...]:
-        return build_menu_spec(self.rows(), self._scheduler.state.to_dict())
+        return build_menu_spec(self.rows(), self._scheduler.state.to_dict(), profiles=self.profiles())
+
+    def profiles(self) -> list[JsonDict]:
+        """The launch profiles, for the "Profili" submenu; never raises."""
+        try:
+            return self._api.list_profiles()
+        except Exception:  # noqa: BLE001 - a broken config must not kill the menu
+            return []
 
     # -- pystray glue --------------------------------------------------------
 
@@ -497,6 +543,11 @@ class TrayApp:
             instance_id = str(args[0]) if args else ""
             self._in_worker("ripara", lambda: api.repair_instance(instance_id))
             return
+        if action == "apply_profile":
+            name = str(args[0]) if args else ""
+            _log.info("tray: applying profile %s", name)
+            self._in_worker("profilo", lambda: api.apply_profile(name))
+            return
 
     def open_window(self, page: str = "dashboard", **params: object) -> None:
         """Show the manager window; the window itself lives on the main thread."""
@@ -521,6 +572,20 @@ class TrayApp:
             icon.notify(message, title)
         except Exception:  # noqa: BLE001 - notifications are never load-bearing
             return
+
+    def toggle_window(self) -> None:
+        """What the global hotkey does: show the window, or hide it if shown.
+
+        Runs on the hotkey thread, so the actual window work goes to the
+        worker like every other menu action.
+        """
+        from .window import toggle_window  # noqa: PLC0415
+
+        def work() -> None:
+            toggle_window(self._api)
+
+        _log.info("hotkey: toggling the manager window")
+        self._in_worker("hotkey", work)
 
     def refresh_icon(self) -> None:
         """Redraw the badge and let the shell know the menu changed."""
@@ -552,7 +617,9 @@ class TrayApp:
 
     def on_updates_available(self, plans: Sequence[Any]) -> None:
         """Scheduler callback: one toast per newly published release."""
+        self.write_status_file()
         for plan in plans:
+            _log.info("update available: %s %s", plan.kind.display_name, plan.target.version)
             self.notify(
                 f"{plan.kind.display_name} {plan.target.version} disponibile (hai la {plan.current_version or '?'})",
                 "Aggiornamento disponibile",
@@ -638,6 +705,30 @@ def acquire_mutex(timeout: float = 0.0, *, poll: float = 0.5) -> platform.MutexH
         time.sleep(poll)
 
 
+def start_hotkey(app: TrayApp, config_path: Path | None = None) -> Any | None:
+    """Register ``preferences.hotkey``, if any; returns the live listener.
+
+    A refused combination (another application already owns it) is surfaced as
+    a notification and logged - the manager keeps running without it, which is
+    the only sane outcome for a convenience binding.
+    """
+    combo = manager_config.load(config_path).preferences.hotkey
+    if not combo:
+        return None
+    try:
+        listener = platform.HotkeyListener(combo, app.toggle_window)
+    except platform.HotkeyError as error:
+        _log.warning("hotkey %s not registered: %s", combo, error)
+        app.notify(f"Hotkey non valida: {error}")
+        return None
+    if not listener.start():
+        _log.warning("hotkey %s not registered: %s", combo, listener.error)
+        app.notify(f"Hotkey {combo} non registrata: {listener.error}")
+        return None
+    _log.info("hotkey %s registered", combo)
+    return listener
+
+
 def run_tray(
     config_path: Path | None = None,
     *,
@@ -669,6 +760,7 @@ def run_tray(
     icon = app.build_icon()
 
     threading.Thread(target=icon.run, name="umm-tray-icon", daemon=True).start()
+    hotkey = start_hotkey(app, config_path)
     scheduler.start()
     if manager_config.load(config_path).preferences.watchdog_enabled:
         app.watchdog.start()
@@ -680,6 +772,8 @@ def run_tray(
     try:
         run_main_loop(app.api)
     finally:
+        if hotkey is not None:
+            hotkey.stop()
         scheduler.stop(timeout=2.0)
         app.watchdog.stop(timeout=2.0)
         try:

@@ -16,7 +16,9 @@ from typing import Any, Literal
 
 __all__ = [
     "CONFIG_DIR_SOURCES",
+    "KIND_FAMILIES",
     "ConfigDirSource",
+    "KindFamily",
     "Instance",
     "JsonDict",
     "MonitorKind",
@@ -38,6 +40,20 @@ section 8: never guess, say so).
 """
 
 CONFIG_DIR_SOURCES: tuple[ConfigDirSource, ...] = ("cmdline", "env", "default", "unknown")
+
+KindFamily = Literal["usage-monitor", "github-exe"]
+"""What a registry entry describes (PLAN.md section 9.9).
+
+``usage-monitor`` is a member of the Usage Monitor family: it has a config
+directory, an environment variable, an instance suffix and a settings file, and
+several instances of it can share one executable.
+
+``github-exe`` is the generic case: a portable executable kept up to date from
+GitHub Releases, with no config directory, no environment variable and no
+settings file. One instance per executable path, identified by that path.
+"""
+
+KIND_FAMILIES: tuple[KindFamily, ...] = ("usage-monitor", "github-exe")
 
 
 def _path_str(value: Path | None) -> str | None:
@@ -61,19 +77,44 @@ class MonitorKind:
     display_name: str
     exe_name: str
     pe_product_name: str
-    env_var: str
-    default_config_dir_factory: Callable[[], Path]
     repo: str
     asset_pattern: str
     sha_sidecar: bool
     settings_schema_id: str
     mutex_base: str
     run_key_base: str
+    env_var: str | None = None
+    """The environment variable carrying the config dir; ``None`` for
+    ``github-exe`` kinds, which have no config dir at all and whose environment
+    is therefore never read (PLAN.md section 9.9)."""
+    default_config_dir_factory: Callable[[], Path] = Path
+    """Only meaningful for the ``usage-monitor`` family; a ``github-exe`` kind
+    leaves it at the empty path, which every caller guards on ``family``."""
+    family: KindFamily = "usage-monitor"
+    disabled_reason: str | None = None
+    """Set when the entry is known but unusable (e.g. the release publishes no
+    executable asset). Such a kind is listed and never acted upon."""
+    source: str = "builtin"
+    """``builtin`` or ``custom``: where the entry came from."""
 
     @property
     def default_config_dir(self) -> Path:
         """Resolve the kind's default config directory (``~/.claude``, ...)."""
         return self.default_config_dir_factory()
+
+    @property
+    def is_github_exe(self) -> bool:
+        """True for a portable executable without config dir or settings."""
+        return self.family == "github-exe"
+
+    @property
+    def has_config_dir(self) -> bool:
+        """True when the kind's instances are identified by a config dir."""
+        return self.family == "usage-monitor"
+
+    @property
+    def enabled(self) -> bool:
+        return self.disabled_reason is None
 
     @property
     def exe_stem(self) -> str:
@@ -86,14 +127,17 @@ class MonitorKind:
             "display_name": self.display_name,
             "exe_name": self.exe_name,
             "pe_product_name": self.pe_product_name,
+            "family": self.family,
             "env_var": self.env_var,
-            "default_config_dir": str(self.default_config_dir),
+            "default_config_dir": str(self.default_config_dir) if self.has_config_dir else None,
             "repo": self.repo,
             "asset_pattern": self.asset_pattern,
             "sha_sidecar": self.sha_sidecar,
             "settings_schema_id": self.settings_schema_id,
             "mutex_base": self.mutex_base,
             "run_key_base": self.run_key_base,
+            "disabled_reason": self.disabled_reason,
+            "source": self.source,
         }
 
 

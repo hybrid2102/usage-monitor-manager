@@ -263,22 +263,35 @@ def mutex_name(instance: Instance) -> str:
 
 
 def is_default_config_dir(instance: Instance) -> bool:
-    """True when the instance uses its kind's default directory (``~/.claude``)."""
+    """True when the instance needs no ``--config-dir`` on its command line.
+
+    That is the case for an instance living in its kind's default directory
+    (``~/.claude``) and, by construction, for every ``github-exe`` instance:
+    those have no config dir at all, so there is nothing to pass and nothing
+    to put in the environment (PLAN.md section 9.9).
+    """
+    if not instance.kind.has_config_dir:
+        return True
     return _normcase(instance.config_dir) == _normcase(instance.kind.default_config_dir)
 
 
-def build_argv(instance: Instance) -> list[str]:
+def build_argv(instance: Instance, extra_args: Sequence[str] = ()) -> list[str]:
     """``[exe]`` for the default config dir, ``[exe, --config-dir=PATH]`` else.
 
     Passing the flag explicitly is a deliberate choice (PLAN.md section 6.2):
     an instance we started is then identifiable from its command line alone,
     without having to read its environment.
+
+    ``extra_args`` are appended verbatim, after the config dir. That is how
+    the diagnostic mode of PLAN.md section 9.7 adds ``--verbose`` without a
+    second launch path.
     """
     if instance.exe_path is None:
         raise ValueError(f"instance {instance.instance_id} has no executable path")
     argv = [str(instance.exe_path)]
     if not is_default_config_dir(instance):
         argv.append(f"{CONFIG_DIR_FLAG}={instance.config_dir}")
+    argv.extend(extra_args)
     return argv
 
 
@@ -340,9 +353,10 @@ def set_instance_autostart(
 
 def build_env_overrides(instance: Instance) -> dict[str, str]:
     """The kind's environment variable, only for a non-default config dir."""
-    if is_default_config_dir(instance):
+    env_var = instance.kind.env_var
+    if env_var is None or is_default_config_dir(instance):
         return {}
-    return {instance.kind.env_var: str(instance.config_dir)}
+    return {env_var: str(instance.config_dir)}
 
 
 INHERITED_ENV_BLOCKLIST = ("_PYI_", "_MEI")
@@ -370,7 +384,8 @@ def strips_env_var(instance: Instance) -> bool:
     prevent. The variable is therefore never inherited: it is deleted for a
     default config dir and set explicitly otherwise.
     """
-    return is_default_config_dir(instance) and instance.kind.env_var in os.environ
+    env_var = instance.kind.env_var
+    return env_var is not None and is_default_config_dir(instance) and env_var in os.environ
 
 
 def inherited_env() -> dict[str, str]:
@@ -387,8 +402,11 @@ def inherited_env() -> dict[str, str]:
 def build_env(instance: Instance) -> dict[str, str]:
     """The child's environment: inherited, scrubbed, then made unambiguous."""
     env = inherited_env()
+    env_var = instance.kind.env_var
+    if env_var is None:
+        return env
     if is_default_config_dir(instance):
-        env.pop(instance.kind.env_var, None)
+        env.pop(env_var, None)
     else:
         env.update(build_env_overrides(instance))
     return env
@@ -633,27 +651,50 @@ def stop(
 # --------------------------------------------------------------------------- #
 
 
-def _spawn(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> int:
-    """Launch detached and windowless; returns the PID of the bootloader."""
+def _spawn(
+    argv: Sequence[str],
+    env: Mapping[str, str],
+    cwd: Path,
+    log_path: Path | None = None,
+) -> int:
+    """Launch detached and windowless; returns the PID of the bootloader.
+
+    ``log_path`` redirects both standard streams to that file, appending. The
+    handle is closed here: the child keeps its own inherited copy, which is
+    what makes the diagnostic log keep growing after we return.
+    """
     kwargs: dict[str, Any] = platform.no_window_popen_kwargs()
     creationflags = int(kwargs.pop("creationflags", 0)) | platform.DETACHED_PROCESS
-    process = subprocess.Popen(  # noqa: S603 - argv is built from the kind registry
-        list(argv),
-        cwd=str(cwd),
-        env=dict(env),
-        creationflags=creationflags,
-        close_fds=True,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        **kwargs,
-    )
+    stream = None
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        stream = log_path.open("ab")
+    try:
+        process = subprocess.Popen(  # noqa: S603 - argv is built from the kind registry
+            list(argv),
+            cwd=str(cwd),
+            env=dict(env),
+            creationflags=creationflags,
+            close_fds=stream is None,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL if stream is None else stream,
+            stderr=subprocess.DEVNULL if stream is None else subprocess.STDOUT,
+            **kwargs,
+        )
+    finally:
+        if stream is not None:
+            stream.close()
     return process.pid
 
 
-def spawn_detached(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> int:
+def spawn_detached(
+    argv: Sequence[str],
+    env: Mapping[str, str],
+    cwd: Path,
+    log_path: Path | None = None,
+) -> int:
     """Public name of the detached, windowless launch used across the manager."""
-    return _spawn(argv, env, cwd)
+    return _spawn(argv, env, cwd, log_path)
 
 
 def _find_running(instance: Instance) -> Instance | None:
@@ -672,11 +713,18 @@ def start(
     instance: Instance,
     wait_seconds: float = DEFAULT_START_WAIT,
     on_event: EventCallback | None = None,
+    *,
+    extra_args: Sequence[str] = (),
+    log_path: Path | None = None,
 ) -> StartResult:
     """Launch the instance detached, then confirm a running pair came up.
 
     Refuses to start while the single-instance mutex is held: the monitor would
     exit immediately and the user would be left wondering why nothing happened.
+
+    ``extra_args`` and ``log_path`` are the diagnostic mode of PLAN.md
+    section 9.7: the instance is started with ``--verbose`` and its two output
+    streams are appended to a file instead of being thrown away.
     """
     report = _Reporter("start", instance.instance_id, on_event)
     name = mutex_name(instance)
@@ -707,12 +755,14 @@ def start(
             already_running=True,
         )
 
-    argv = tuple(build_argv(instance))
+    argv = tuple(build_argv(instance, extra_args))
     overrides = build_env_overrides(instance)
     env = build_env(instance)
     report("start_begin", f"launching {' '.join(argv)}")
+    if log_path is not None:
+        report("start_begin", f"output redirected to {log_path}")
     try:
-        pid = _spawn(argv, env, exe.parent)
+        pid = _spawn(argv, env, exe.parent, log_path)
     except (OSError, ValueError) as error:
         report("error", f"cannot launch {exe}: {error}")
         return result(False, f"launch failed: {error}", argv=argv, env_overrides=overrides)
@@ -839,11 +889,11 @@ def describe_stop(instance: Instance) -> str:
     )
 
 
-def describe_start(instance: Instance) -> str:
+def describe_start(instance: Instance, extra_args: Sequence[str] = ()) -> str:
     """One-line preview of what :func:`start` would do (``--dry-run``)."""
     if instance.exe_path is None:
         return f"would skip {instance.instance_id}: executable path unknown"
-    argv = " ".join(build_argv(instance))
+    argv = " ".join(build_argv(instance, extra_args))
     env = "".join(f" {key}={value}" for key, value in sorted(build_env_overrides(instance).items()))
     if strips_env_var(instance):
         env = f" (without {instance.kind.env_var})"

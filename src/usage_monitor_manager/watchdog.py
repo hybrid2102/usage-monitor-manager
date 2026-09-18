@@ -34,6 +34,7 @@ clock and the waiter are injected, and the repair actions go through
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -44,6 +45,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from . import manager_config
 from .model import JsonDict
+
+_log = logging.getLogger("umm.watchdog")
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from .model import Instance
@@ -378,6 +381,8 @@ class Watchdog:
         events.extend(self._orphans(current, now))
 
         events = [self._maybe_auto_restart(event) for event in events]
+        for event in events:
+            _log.info("watchdog %s %s: %s", event.type, event.instance_id, event.detail)
         state = WatchdogState(last_poll=now, events=tuple(events))
         with self._lock:
             self._state = state

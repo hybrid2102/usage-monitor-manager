@@ -24,6 +24,7 @@ and never reach GitHub.
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -34,6 +35,8 @@ from . import __version__, manager_config
 from .model import JsonDict, UpdatePlan
 from .self_update import MANAGER_REPO, SelfUpdateCheck, check_self
 from .versions import VersionStatus
+
+_log = logging.getLogger("umm.scheduler")
 
 __all__ = [
     "DEFAULT_FIRST_DELAY_SECONDS",
@@ -234,6 +237,7 @@ class UpdateScheduler:
         try:
             plans = tuple(self._provide(config))
         except Exception as error:  # noqa: BLE001 - the UI shows the text, whatever it is
+            _log.warning("update check failed: %s", error)
             return self._set_state(checking=False, error=f"{type(error).__name__}: {error}", last_check=self._clock())
         outdated = tuple(plan for plan in plans if _is_available(plan))
         available = tuple(plan for plan in outdated if not config.is_skipped(plan.kind.repo, plan.target.tag))
@@ -248,6 +252,7 @@ class UpdateScheduler:
                 error=str(error),
             )
         now = self._clock()
+        _log.info("update check: %d plans, %d available", len(plans), len(available))
         state = self._set_state(
             checking=False,
             error=None,

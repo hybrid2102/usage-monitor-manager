@@ -50,6 +50,7 @@ __all__ = [
     "ManagerWindow",
     "destroy_windows",
     "open_window",
+    "toggle_window",
     "run_main_loop",
     "web_dir",
 ]
@@ -911,6 +912,188 @@ class JsApi:
         payload["lines"] = report.lines()
         return payload
 
+    # -- kind registry (PLAN.md section 9.9) ---------------------------------
+
+    def list_kinds(self) -> list[JsonDict]:
+        """Every registry entry, built-in and user-defined."""
+        from .. import kinds
+
+        kinds.reload(self._config(), self._config_path)
+        return [kind.to_dict() for kind in kinds.all_kinds()]
+
+    def add_kind(self, data: JsonDict) -> JsonDict:
+        """Add a user-defined ``github-exe`` kind from the Manager-page form."""
+        from .. import kinds
+
+        entry = manager_config.CustomKind(
+            key=str(data.get("key", "")).strip().casefold(),
+            display_name=str(data.get("display_name", "")).strip(),
+            exe_name=str(data.get("exe_name", "")).strip(),
+            repo=str(data.get("repo", "")).strip(),
+            asset_pattern=str(data.get("asset_pattern", "") or "").strip(),
+            sha_sidecar=bool(data.get("sha_sidecar")),
+            pe_product_name=(str(data.get("pe_product_name") or "").strip() or None),
+        )
+        problems = kinds.add_custom_kind(entry, self._config_path)
+        return {"ok": not problems, "problems": problems, "kinds": self.list_kinds()}
+
+    def remove_kind(self, key: str) -> JsonDict:
+        """Remove a user-defined kind; built-ins are never removed."""
+        from .. import kinds
+
+        removed = kinds.remove_custom_kind(str(key), self._config_path)
+        return {"ok": removed, "removed": removed, "kinds": self.list_kinds()}
+
+    # -- launch profiles (PLAN.md section 9.13) ------------------------------
+
+    def list_profiles(self) -> list[JsonDict]:
+        """The configured launch profiles, for the tray submenu and the editor."""
+        return [profile.to_dict() for profile in self._config().profiles]
+
+    def save_profile(self, name: str, instance_ids: Sequence[str]) -> JsonDict:
+        """Create or replace one profile."""
+        label = str(name).strip()
+        if not label:
+            return {"ok": False, "detail": "il nome del profilo e' vuoto"}
+        ids = tuple(dict.fromkeys(str(item).strip() for item in instance_ids if str(item).strip()))
+        try:
+            manager_config.upsert_profile(manager_config.Profile(name=label, instance_ids=ids), self._config_path)
+        except OSError as error:
+            return {"ok": False, "detail": str(error)}
+        return {"ok": True, "profiles": self.list_profiles()}
+
+    def delete_profile(self, name: str) -> JsonDict:
+        try:
+            removed = manager_config.remove_profile(str(name), self._config_path)
+        except OSError as error:
+            return {"ok": False, "detail": str(error)}
+        return {"ok": removed, "profiles": self.list_profiles()}
+
+    def profile_plan(self, name: str) -> JsonDict:
+        """What applying the profile would do, without doing it."""
+        from .. import profiles
+
+        profile = manager_config.find_profile(self._config(), str(name))
+        if profile is None:
+            return {"ok": False, "detail": f"profilo {name!r} sconosciuto"}
+        plan = profiles.plan(profile, self._discover())
+        return {"ok": True, **plan.to_dict(), "steps": profiles.describe(plan)}
+
+    def apply_profile(self, name: str) -> JsonDict:
+        """Start the profile's instances and stop the other monitors."""
+        from .. import profiles
+
+        profile = manager_config.find_profile(self._config(), str(name))
+        if profile is None:
+            return {"ok": False, "detail": f"profilo {name!r} sconosciuto"}
+        plan = profiles.plan(profile, self._discover())
+        result = profiles.apply_plan(plan, on_event=self._process_event("profile"))
+        self._discover()
+        return dict(result.to_dict())
+
+    # -- diagnostics (PLAN.md section 9.7) -----------------------------------
+
+    def diag_state(self, lines: int = 200) -> JsonDict:
+        """The current diagnostic session and the tail of its log."""
+        from .. import diag
+
+        session = diag.read_state()
+        return {
+            "session": None if session is None else session.to_dict(),
+            "lines": [] if session is None else diag.tail(session.log_path, max(1, int(lines))),
+            "logs": [] if session is None else [str(path) for path in diag.list_logs(session.instance_id)],
+            "manager_log": str(diag.manager_log_path()),
+        }
+
+    def diag_start(self, instance_id: str) -> JsonDict:
+        from .. import diag
+
+        instance = self._instance(str(instance_id))
+        if instance is None:
+            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+        result = diag.start_diagnostics(instance, on_event=self._process_event("diag"))
+        self._discover()
+        return dict(result.to_dict())
+
+    def diag_stop(self, instance_id: str) -> JsonDict:
+        from .. import diag
+
+        instance = self._instance(str(instance_id))
+        if instance is None:
+            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+        result = diag.stop_diagnostics(instance, on_event=self._process_event("diag"))
+        self._discover()
+        return dict(result.to_dict())
+
+    def diag_log(self, path: str = "", lines: int = 200) -> JsonDict:
+        """The tail of one log file (the viewer's "aggiorna" and "segui")."""
+        from .. import diag
+
+        target = Path(path) if path else diag.manager_log_path()
+        return {"path": str(target), "lines": diag.tail(target, max(1, int(lines)))}
+
+    def diag_report(self, instance_id: str = "", lines: int = 200) -> JsonDict:
+        """The "Copia diagnostica" block: versions, paths, log tail, status."""
+        from .. import diag
+        from ..status_file import build_status
+
+        instance = self._instance(str(instance_id)) if instance_id else None
+        session = diag.read_state()
+        log_lines: list[str] = []
+        if session is not None:
+            log_lines = diag.tail(session.log_path, max(1, int(lines)))
+        elif instance is not None:
+            logs = diag.list_logs(instance.instance_id)
+            if logs:
+                log_lines = diag.tail(logs[-1], max(1, int(lines)))
+        text = diag.collect_report(
+            build_status(check=False),
+            instance=instance,
+            log_lines=log_lines,
+            manager_version=__version__,
+        )
+        return {"ok": True, "text": text}
+
+    def get_manager_log(self, lines: int = 50) -> JsonDict:
+        """The tail of ``manager.log`` shown on the Manager page."""
+        from .. import diag
+
+        return {"path": str(diag.manager_log_path()), "lines": diag.tail_manager_log(max(1, int(lines)))}
+
+    # -- status file and hotkey ----------------------------------------------
+
+    def set_status_file(self, path: str | None) -> JsonDict:
+        """Point ``preferences.status_file`` somewhere (or nowhere) and write it."""
+        from ..status_file import build_status, write_status_file
+
+        value = (str(path).strip() or None) if path is not None else None
+        result = self.set_preference("status_file", value)
+        if not result.get("ok") or value is None:
+            return result
+        try:
+            written = write_status_file(build_status(check=False), value)
+        except OSError as error:
+            return {**result, "ok": False, "detail": str(error)}
+        return {**result, "written": str(written)}
+
+    def set_hotkey(self, combo: str | None) -> JsonDict:
+        """Validate and store the global hotkey (PLAN.md section 9.14).
+
+        Only the *parsing* happens here: registering it belongs to the tray,
+        which owns the listener and reports a conflict as a notification. The
+        page is told that a restart of the tray is what makes it live.
+        """
+        from .. import platform as platform_layer
+
+        value = (str(combo).strip() or None) if combo is not None else None
+        if value is not None:
+            try:
+                value = platform_layer.normalize_hotkey(value)
+            except platform_layer.HotkeyError as error:
+                return {"ok": False, "detail": str(error)}
+        result = self.set_preference("hotkey", value)
+        return {**result, "hotkey": value, "restart_required": True}
+
     def open_folder(self, path: str) -> JsonDict:
         """Reveal a folder (or a file's folder) in Explorer."""
         target = Path(path)
@@ -940,12 +1123,24 @@ class ManagerWindow:
         self._api = api
         self._window: Any | None = None
         self._lock = threading.Lock()
+        self._visible = False
         self.quitting = False
         """Set by :meth:`destroy` so the ``closing`` handler stops vetoing."""
 
     @property
     def exists(self) -> bool:
         return self._window is not None
+
+    @property
+    def visible(self) -> bool:
+        """Whether the window is currently shown.
+
+        Tracked here rather than asked of pywebview: the toggle of the global
+        hotkey (PLAN.md section 9.14) runs on a thread that must not block on
+        the UI, and the window is only ever shown and hidden through this
+        class.
+        """
+        return self._visible
 
     def _emit(self, payload: JsonDict) -> None:
         """Push one event into the page; ignored while no page is loaded."""
@@ -992,6 +1187,7 @@ class ManagerWindow:
                 """
                 if self.quitting:
                     return True
+                self._visible = False
                 window.hide()
                 return False
 
@@ -1007,6 +1203,7 @@ class ManagerWindow:
         window = self.create(page)
         try:
             window.show()
+            self._visible = True
             if page in PAGES:
                 window.evaluate_js(f"window.umm && window.umm.goto({json.dumps(page)}, {json.dumps(focus)})")
         except Exception:  # noqa: BLE001 - a window that will not show is not fatal
@@ -1014,11 +1211,23 @@ class ManagerWindow:
 
     def hide(self) -> None:
         window = self._window
+        self._visible = False
         if window is not None:
             try:
                 window.hide()
             except Exception:  # noqa: BLE001
                 return
+
+    def toggle(self, page: str = "dashboard") -> bool:
+        """Show the window if it is hidden, hide it if it is up.
+
+        Returns the new visibility. This is what the global hotkey calls.
+        """
+        if self._visible:
+            self.hide()
+            return False
+        self.show(page)
+        return True
 
     def destroy(self) -> None:
         """Really close the window, ending the pywebview loop."""
@@ -1046,6 +1255,14 @@ def open_window(page: str = "dashboard", api: JsApi | None = None, focus: str | 
         _window_singleton = ManagerWindow(api if api is not None else JsApi())
     _window_singleton.show(page, focus)
     return _window_singleton
+
+
+def toggle_window(api: JsApi | None = None) -> bool:
+    """Toggle the process-wide manager window; returns the new visibility."""
+    global _window_singleton  # noqa: PLW0603 - see open_window
+    if _window_singleton is None:
+        _window_singleton = ManagerWindow(api if api is not None else JsApi())
+    return _window_singleton.toggle()
 
 
 def destroy_windows() -> None:

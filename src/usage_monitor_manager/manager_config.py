@@ -40,6 +40,13 @@ from .model import JsonDict
 
 __all__ = [
     "APP_DIR_NAME",
+    "CustomKind",
+    "Profile",
+    "find_profile",
+    "remove_custom_kind",
+    "remove_profile",
+    "upsert_custom_kind",
+    "upsert_profile",
     "set_prerelease_repo",
     "skip_version",
     "unskip_version",
@@ -145,6 +152,16 @@ class Preferences:
     """
     archive_keep: int = 3
     """How many previous builds of each executable ``.umm-archive`` keeps."""
+    status_file: str | None = None
+    """Where the tray rewrites ``status.json`` after every cycle (section 9.11).
+
+    ``None`` disables the file entirely; the default, because a manager that
+    writes into a path nobody asked for is exactly the "stato implicito" the
+    plan forbids.
+    """
+    hotkey: str | None = None
+    """Global hotkey toggling the manager window, e.g. ``ctrl+alt+u``
+    (section 9.14). ``None`` registers nothing."""
 
     @classmethod
     def from_dict(cls, payload: object) -> Preferences:
@@ -170,6 +187,8 @@ class Preferences:
                 low=_MIN_ARCHIVE_KEEP,
                 high=_MAX_ARCHIVE_KEEP,
             ),
+            status_file=_as_str(data.get("status_file")),
+            hotkey=_as_str(data.get("hotkey")),
         )
 
     def to_dict(self) -> JsonDict:
@@ -182,6 +201,8 @@ class Preferences:
             "watchdog_enabled": self.watchdog_enabled,
             "auto_restart_crashed": self.auto_restart_crashed,
             "archive_keep": self.archive_keep,
+            "status_file": self.status_file,
+            "hotkey": self.hotkey,
         }
 
     def with_value(self, key: str, value: object) -> Preferences:
@@ -236,6 +257,84 @@ class DeclaredInstance:
 
 
 @dataclass(frozen=True, slots=True)
+class CustomKind:
+    """A user-defined ``github-exe`` registry entry (PLAN.md section 9.9).
+
+    The manager ships three monitors and one portable executable; everything
+    else the user wants kept up to date from GitHub Releases is declared here
+    and merged into the kind registry at load time by ``kinds.reload``.
+    Validation lives in ``kinds.validate_custom_kind``, next to the merge.
+    """
+
+    key: str
+    display_name: str
+    exe_name: str
+    repo: str
+    asset_pattern: str = ""
+    sha_sidecar: bool = False
+    pe_product_name: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.asset_pattern:
+            object.__setattr__(self, "asset_pattern", self.exe_name)
+
+    @classmethod
+    def from_dict(cls, payload: object) -> CustomKind | None:
+        data = _as_dict(payload)
+        key = _as_str(data.get("key"))
+        exe_name = _as_str(data.get("exe_name"))
+        repo = _as_str(data.get("repo"))
+        if key is None or exe_name is None or repo is None:
+            return None
+        return cls(
+            key=key.casefold(),
+            display_name=_as_str(data.get("display_name")) or key,
+            exe_name=exe_name,
+            repo=repo,
+            asset_pattern=_as_str(data.get("asset_pattern")) or exe_name,
+            sha_sidecar=_as_bool(data.get("sha_sidecar"), False),
+            pe_product_name=_as_str(data.get("pe_product_name")),
+        )
+
+    def to_dict(self) -> JsonDict:
+        return {
+            "key": self.key,
+            "display_name": self.display_name,
+            "exe_name": self.exe_name,
+            "repo": self.repo,
+            "asset_pattern": self.asset_pattern,
+            "sha_sidecar": self.sha_sidecar,
+            "pe_product_name": self.pe_product_name,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Profile:
+    """A launch profile: a name and the instance ids it starts (section 9.13)."""
+
+    name: str
+    instance_ids: tuple[str, ...] = ()
+
+    @classmethod
+    def from_dict(cls, payload: object) -> Profile | None:
+        data = _as_dict(payload)
+        name = _as_str(data.get("name"))
+        if name is None:
+            return None
+        raw = data.get("instance_ids")
+        ids: list[str] = []
+        if isinstance(raw, list):
+            for item in cast(list[object], raw):
+                text = _as_str(item)
+                if text is not None and text not in ids:
+                    ids.append(text)
+        return cls(name=name, instance_ids=tuple(ids))
+
+    def to_dict(self) -> JsonDict:
+        return {"name": self.name, "instance_ids": list(self.instance_ids)}
+
+
+@dataclass(frozen=True, slots=True)
 class ManagerConfig:
     """The whole file, parsed and validated.
 
@@ -251,6 +350,10 @@ class ManagerConfig:
     skipped_versions: Mapping[str, str] = field(default_factory=lambda: {})
     prerelease_repos: Mapping[str, bool] = field(default_factory=lambda: {})
     """Per-repo override of ``preferences.include_prerelease`` (PLAN.md section 9.5)."""
+    custom_kinds: tuple[CustomKind, ...] = ()
+    """User-defined registry entries, merged by ``kinds.reload``."""
+    profiles: tuple[Profile, ...] = ()
+    """Launch profiles of PLAN.md section 9.13."""
     legacy_import_done: bool = False
     extra: Mapping[str, Any] = field(default_factory=lambda: {})
 
@@ -265,6 +368,8 @@ class ManagerConfig:
             "last_check",
             "skipped_versions",
             "prerelease_repos",
+            "custom_kinds",
+            "profiles",
             "legacy_import_done",
         }
         raw_instances = data.get("instances")
@@ -276,9 +381,29 @@ class ManagerConfig:
                 if entry is not None and entry.merge_key not in seen:
                     seen.add(entry.merge_key)
                     entries.append(entry)
+        custom: list[CustomKind] = []
+        custom_seen: set[str] = set()
+        raw_custom = data.get("custom_kinds")
+        if isinstance(raw_custom, list):
+            for item in cast(list[object], raw_custom):
+                kind_entry = CustomKind.from_dict(item)
+                if kind_entry is not None and kind_entry.key not in custom_seen:
+                    custom_seen.add(kind_entry.key)
+                    custom.append(kind_entry)
+        profiles: list[Profile] = []
+        profile_seen: set[str] = set()
+        raw_profiles = data.get("profiles")
+        if isinstance(raw_profiles, list):
+            for item in cast(list[object], raw_profiles):
+                profile = Profile.from_dict(item)
+                if profile is not None and profile.name.casefold() not in profile_seen:
+                    profile_seen.add(profile.name.casefold())
+                    profiles.append(profile)
         return cls(
             version=CONFIG_VERSION,
             instances=tuple(entries),
+            custom_kinds=tuple(custom),
+            profiles=tuple(profiles),
             preferences=Preferences.from_dict(data.get("preferences")),
             last_check=_as_str_map(data.get("last_check")),
             skipped_versions=_as_str_map(data.get("skipped_versions")),
@@ -297,6 +422,8 @@ class ManagerConfig:
                 "last_check": dict(self.last_check),
                 "skipped_versions": dict(self.skipped_versions),
                 "prerelease_repos": dict(self.prerelease_repos),
+                "custom_kinds": [entry.to_dict() for entry in self.custom_kinds],
+                "profiles": [entry.to_dict() for entry in self.profiles],
                 "legacy_import_done": self.legacy_import_done,
             }
         )
@@ -434,3 +561,53 @@ def set_prerelease_repo(repo: str, value: bool | None, path: Path | None = None)
     updated = replace(config, prerelease_repos=overrides)
     save(updated, path)
     return updated
+
+
+def upsert_custom_kind(entry: CustomKind, path: Path | None = None) -> ManagerConfig:
+    """Add or replace one user-defined kind (matched on its key)."""
+    config = load(path)
+    others = [item for item in config.custom_kinds if item.key != entry.key]
+    updated = replace(config, custom_kinds=(*others, entry))
+    save(updated, path)
+    return updated
+
+
+def remove_custom_kind(key: str, path: Path | None = None) -> bool:
+    """Remove one user-defined kind; ``False`` when there was none."""
+    config = load(path)
+    wanted = key.casefold()
+    others = tuple(item for item in config.custom_kinds if item.key.casefold() != wanted)
+    if len(others) == len(config.custom_kinds):
+        return False
+    save(replace(config, custom_kinds=others), path)
+    return True
+
+
+def find_profile(config: ManagerConfig, name: str) -> Profile | None:
+    """The profile called ``name`` (case-insensitive), or ``None``."""
+    wanted = name.casefold()
+    for profile in config.profiles:
+        if profile.name.casefold() == wanted:
+            return profile
+    return None
+
+
+def upsert_profile(profile: Profile, path: Path | None = None) -> ManagerConfig:
+    """Add or replace one launch profile (matched on its name, folded)."""
+    config = load(path)
+    wanted = profile.name.casefold()
+    others = [item for item in config.profiles if item.name.casefold() != wanted]
+    updated = replace(config, profiles=(*others, profile))
+    save(updated, path)
+    return updated
+
+
+def remove_profile(name: str, path: Path | None = None) -> bool:
+    """Remove one launch profile; ``False`` when there was none."""
+    config = load(path)
+    wanted = name.casefold()
+    others = tuple(item for item in config.profiles if item.name.casefold() != wanted)
+    if len(others) == len(config.profiles):
+        return False
+    save(replace(config, profiles=others), path)
+    return True

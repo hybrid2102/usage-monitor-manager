@@ -66,7 +66,7 @@ def _plan(*, tag: str = "v0.3.2", version: str = "0.3.2") -> UpdatePlan:
 @pytest.fixture
 def plans(monkeypatch: pytest.MonkeyPatch) -> list[UpdatePlan]:
     built = [_plan()]
-    monkeypatch.setattr(cli, "_build_plans", lambda kinds, *, prerelease: list(built))
+    monkeypatch.setattr(cli, "build_plans", lambda kinds, *, prerelease: list(built))
     monkeypatch.setattr("usage_monitor_manager.discovery.discover", lambda *a, **k: [_instance()])
     return built
 
@@ -191,7 +191,7 @@ def test_skip_reports_a_network_failure(monkeypatch: pytest.MonkeyPatch, capsys:
     def explode(kinds: object, *, prerelease: bool) -> list[UpdatePlan]:
         raise GitHubError("cannot reach GitHub")
 
-    monkeypatch.setattr(cli, "_build_plans", explode)
+    monkeypatch.setattr(cli, "build_plans", explode)
     assert main(["skip", "--kind", "copilot"]) == EXIT_NETWORK
     assert "cannot reach GitHub" in capsys.readouterr().err
 
@@ -237,7 +237,7 @@ def test_unattended_update_returns_3_on_a_network_error(monkeypatch: pytest.Monk
     def explode(kinds: object, *, prerelease: bool) -> list[UpdatePlan]:
         raise GitHubError("cannot reach GitHub")
 
-    monkeypatch.setattr(cli, "_build_plans", explode)
+    monkeypatch.setattr(cli, "build_plans", explode)
     assert main(["update", "--all", "--yes"]) == EXIT_NETWORK
 
 
@@ -419,7 +419,7 @@ def test_status_json_is_offline_by_default(capsys: pytest.CaptureFixture[str], m
     monkeypatch.setattr("usage_monitor_manager.discovery.discover", lambda *a, **k: [_instance()])
     monkeypatch.setattr(
         cli,
-        "_build_plans",
+        "build_plans",
         lambda kinds, *, prerelease: pytest.fail("umm status must not check GitHub without --check"),
     )
     assert main(["status", "--json"]) == 0

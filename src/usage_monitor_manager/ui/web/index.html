@@ -17,6 +17,7 @@
         <button class="tab" data-page="dashboard" role="tab">Dashboard</button>
         <button class="tab" data-page="updates" role="tab">Aggiornamenti</button>
         <button class="tab" data-page="settings" role="tab">Impostazioni</button>
+        <button class="tab" data-page="diag" role="tab">Diagnostica</button>
         <button class="tab" data-page="manager" role="tab">Manager</button>
       </nav>
       <div class="topbar-actions">
@@ -187,6 +188,36 @@
         <pre class="code-block log" id="settings-log"></pre>
       </section>
 
+      <!-- ----------------------------------------------- Diagnostica -->
+      <section class="page" id="page-diag">
+        <div class="bar">
+          <h1>Diagnostica</h1>
+          <div class="group">
+            <select id="diag-instance"></select>
+            <button class="btn primary" id="btn-diag-start">Avvia con --verbose</button>
+            <button class="btn danger" id="btn-diag-stop">Torna in modalita&rsquo; normale</button>
+            <button class="btn" id="btn-diag-report">Copia diagnostica</button>
+          </div>
+        </div>
+        <p class="hint" id="diag-state"></p>
+        <div class="bar">
+          <div class="group">
+            <select id="diag-source"></select>
+            <button class="btn" id="btn-diag-refresh">Aggiorna</button>
+            <label class="row">
+              <input type="checkbox" id="diag-follow" />
+              <span>Segui (2 s)</span>
+            </label>
+            <label class="row">
+              <span>Righe</span>
+              <input type="number" id="diag-lines" min="10" max="5000" value="200" />
+            </label>
+            <button class="btn" id="btn-diag-copy">Copia log</button>
+          </div>
+        </div>
+        <pre class="code-block log" id="diag-log"></pre>
+      </section>
+
       <!-- --------------------------------------------------- Manager -->
       <section class="page" id="page-manager">
         <h1>Manager</h1>
@@ -257,6 +288,59 @@
             <pre class="code-block log" id="self-update-log"></pre>
           </div>
           <div class="panel">
+            <h2>Scorciatoia e file di stato</h2>
+            <label class="row">
+              <span>Hotkey globale</span>
+              <input type="text" id="pref-hotkey" placeholder="ctrl+alt+u" autocomplete="off" />
+              <button class="btn" id="btn-hotkey-capture">Cattura</button>
+              <button class="btn" id="btn-hotkey-clear">Rimuovi</button>
+            </label>
+            <p class="hint" id="hotkey-state"></p>
+            <label class="row">
+              <span>File di stato</span>
+              <input type="text" id="pref-status-file" placeholder="%LOCALAPPDATA%\UsageMonitorManager\status.json" />
+              <button class="btn" id="btn-status-file-save">Salva</button>
+              <button class="btn" id="btn-status-file-clear">Disattiva</button>
+            </label>
+            <p class="hint" id="status-file-state"></p>
+          </div>
+          <div class="panel wide">
+            <h2>Tipi gestiti</h2>
+            <table class="grid" id="kinds-table">
+              <thead>
+                <tr><th>Chiave</th><th>Famiglia</th><th>Eseguibile</th><th>Repo</th><th>Origine</th><th></th></tr>
+              </thead>
+              <tbody id="kinds-body"></tbody>
+            </table>
+            <h3>Aggiungi un eseguibile aggiornato da GitHub Releases</h3>
+            <div class="group">
+              <input type="text" id="kind-key" placeholder="chiave" />
+              <input type="text" id="kind-name" placeholder="nome visualizzato" />
+              <input type="text" id="kind-exe" placeholder="NomeFile.exe" />
+              <input type="text" id="kind-repo" placeholder="owner/repo" />
+              <input type="text" id="kind-asset" placeholder="asset (opzionale)" />
+              <label class="row"><input type="checkbox" id="kind-sidecar" /><span>.sha256</span></label>
+              <button class="btn primary" id="btn-kind-add">Aggiungi</button>
+            </div>
+            <p class="hint" id="kinds-state"></p>
+          </div>
+          <div class="panel wide">
+            <h2>Profili di avvio</h2>
+            <table class="grid" id="profiles-table">
+              <thead>
+                <tr><th>Profilo</th><th>Istanze</th><th></th></tr>
+              </thead>
+              <tbody id="profiles-body"></tbody>
+            </table>
+            <h3>Nuovo profilo</h3>
+            <div class="group">
+              <input type="text" id="profile-name" placeholder="nome" />
+              <select id="profile-instances" multiple size="4"></select>
+              <button class="btn primary" id="btn-profile-save">Salva</button>
+            </div>
+            <p class="hint" id="profiles-state"></p>
+          </div>
+          <div class="panel">
             <h2>Importazione configurazione precedente</h2>
             <div class="group">
               <button class="btn" id="btn-import-dry">Anteprima</button>
@@ -265,7 +349,13 @@
             <pre class="code-block log" id="import-log"></pre>
           </div>
         </div>
-        <h2>Log</h2>
+        <div class="bar">
+          <h2>Log</h2>
+          <div class="group">
+            <button class="btn" id="btn-manager-log-refresh">Aggiorna manager.log</button>
+          </div>
+        </div>
+        <p class="hint mono" id="manager-log-path"></p>
         <pre class="code-block log" id="manager-log"></pre>
       </section>
     </main>
