@@ -99,7 +99,6 @@ def test_version_exits_zero_and_prints_version(capsys: pytest.CaptureFixture[str
 @pytest.mark.parametrize(
     "argv",
     [
-        ["config", "show", "--instance", "claude"],
         ["self-update", "--check-only"],
         ["status", "--json"],
     ],

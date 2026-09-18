@@ -37,6 +37,7 @@ from .model import Instance, JsonDict, UpdatePlan
 from .versions import display_version
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
+    from .settings.store import ValidationReport
     from .updater import UpdateEvent
 
 __all__ = [
@@ -51,11 +52,15 @@ __all__ = [
     "convert_markdown_links",
     "format_check_table",
     "format_instance_table",
+    "EXIT_OK",
     "main",
     "reconfigure_stdout",
     "render_changelog",
     "select_instances",
 ]
+
+EXIT_OK = 0
+"""Everything the command was asked to do succeeded."""
 
 EXIT_FAILED = 1
 """At least one operation failed."""
@@ -164,10 +169,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_json(rollback)
 
     config = subparsers.add_parser("config", help="inspect or edit instance settings")
-    config.add_argument("action", choices=("show", "edit", "validate", "set"))
-    config.add_argument("key", nargs="?", help="settings key (for 'set')")
-    config.add_argument("value", nargs="?", help="settings value (for 'set')")
-    config.add_argument("--instance", help="target instance id")
+    config.add_argument("action", choices=CONFIG_ACTIONS)
+    config.add_argument(
+        "args",
+        nargs="*",
+        metavar="ARG",
+        help="KEY [VALUE] for set/unset, DEST for export, SRC for import, N for diff/restore",
+    )
+    config.add_argument("--instance", metavar="ID", help="target instance id (see 'umm list')")
     _add_json(config)
 
     self_update = subparsers.add_parser("self-update", help="update the manager itself")
@@ -717,6 +726,199 @@ def _cmd_rollback(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 
+# --------------------------------------------------------------------------- #
+# umm config
+# --------------------------------------------------------------------------- #
+
+CONFIG_ACTIONS = (
+    "show",
+    "validate",
+    "set",
+    "unset",
+    "create",
+    "export",
+    "import",
+    "history",
+    "diff",
+    "restore",
+)
+
+
+def _config_instance(instance_id: str | None) -> Instance | None:
+    """The single instance ``--instance`` selects, or ``None``."""
+    from .discovery import discover
+
+    instances = discover()
+    if not instance_id:
+        return instances[0] if len(instances) == 1 else None
+    matches = select_instances(instances, instance_id=instance_id)
+    return matches[0] if len(matches) == 1 else None
+
+
+def parse_setting_value(raw: str) -> object:
+    """JSON first, plain string as a fallback.
+
+    ``umm config set poll_interval 300`` stores a number, ``umm config set
+    bar_fg "#00cc66"`` stores the string (``#00cc66`` is not valid JSON), and
+    ``umm config set tooltip_fields '["five_hour"]'`` stores the list.
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def _print_validation(report: ValidationReport, path: Path) -> None:
+    errors = report.errors
+    unknown = report.unknown_keys
+    if errors:
+        print(f"{path}: {len(errors)} valori non validi")
+        for line in report.formatted():
+            print(line)
+    else:
+        print(f"{path}: valido")
+    if unknown:
+        print("  chiavi sconosciute (conservate): " + ", ".join(unknown))
+
+
+def _cmd_config(args: argparse.Namespace) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - one branch per subaction
+    from . import history as history_module
+    from .settings import store
+
+    instance = _config_instance(args.instance)
+    if instance is None:
+        print(f"umm config: nessuna istanza selezionata da --instance {args.instance!r}")
+        return EXIT_NO_MATCH
+
+    kind = instance.kind.key
+    path = instance.settings_path or store.suggested_path(instance)
+    loaded = store.load(path)
+    rest = list(args.args)
+
+    if args.action == "show":
+        if args.json:
+            print(json.dumps(loaded.to_dict(), indent=2, ensure_ascii=False))
+        else:
+            print(f"# {path}{'' if loaded.exists else '  (non esiste)'}")
+            if loaded.error:
+                print(f"# errore: {loaded.error}")
+            print(store.dumps(loaded.data).rstrip())
+        return EXIT_OK
+
+    if args.action == "validate":
+        report = store.validate(kind, loaded.data)
+        if args.json:
+            payload = report.to_dict()
+            payload["path"] = str(path)
+            payload["exists"] = loaded.exists
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            _print_validation(report, path)
+        return EXIT_OK if report.ok and loaded.error is None else EXIT_FAILED
+
+    if args.action == "create":
+        if path.is_file():
+            print(f"umm config create: {path} esiste già")
+            return EXIT_FAILED
+        target = store.suggested_path(instance)
+        store.create_default(target)
+        print(f"creato {target}")
+        return EXIT_OK
+
+    if args.action in ("set", "unset"):
+        if not rest:
+            print(f"umm config {args.action}: manca la chiave")
+            return EXIT_FAILED
+        key = rest[0]
+        data = dict(loaded.data)
+        if args.action == "set":
+            if len(rest) < 2:
+                print("umm config set: manca il valore")
+                return EXIT_FAILED
+            data[key] = parse_setting_value(rest[1])
+        else:
+            if key not in data:
+                print(f"umm config unset: {key} non era impostata")
+                return EXIT_OK
+            del data[key]
+        report = store.validate(kind, data)
+        if report.errors:
+            _print_validation(report, path)
+            print("nulla è stato scritto")
+            return EXIT_FAILED
+        store.save(path, report.normalized, instance=instance)
+        print(f"{key} {'impostata' if args.action == 'set' else 'rimossa'} in {path}")
+        return EXIT_OK
+
+    if args.action == "export":
+        if not rest:
+            print("umm config export: manca la destinazione")
+            return EXIT_FAILED
+        written = history_module.export(instance, Path(rest[0]), data=loaded.data)
+        print(f"esportato in {written}")
+        return EXIT_OK
+
+    if args.action == "import":
+        if not rest:
+            print("umm config import: manca il file di origine")
+            return EXIT_FAILED
+        result = history_module.import_(instance, Path(rest[0]))
+        if args.json:
+            print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+        else:
+            print(result.detail)
+            for key, message in result.errors:
+                print(f"  {key}: {message}")
+        return EXIT_OK if result.ok else EXIT_FAILED
+
+    versions = history_module.list_versions(instance)
+
+    if args.action == "history":
+        if args.json:
+            print(json.dumps([version.to_dict() for version in versions], indent=2, ensure_ascii=False))
+            return EXIT_OK
+        if not versions:
+            print("nessuna versione archiviata")
+            return EXIT_OK
+        for number, version in enumerate(versions, start=1):
+            stamp = version.saved_at.isoformat() if version.saved_at else version.stamp
+            print(f"{number:>3}  {stamp}  {version.size} byte")
+        return EXIT_OK
+
+    if args.action in ("diff", "restore"):
+        number = 1
+        if rest:
+            try:
+                number = int(rest[0])
+            except ValueError:
+                print(f"umm config {args.action}: {rest[0]!r} non è un numero di versione")
+                return EXIT_FAILED
+        if not 1 <= number <= len(versions):
+            print(f"umm config {args.action}: versione {number} inesistente (ce ne sono {len(versions)})")
+            return EXIT_FAILED
+        version = versions[number - 1]
+        data = history_module.read_version(instance, version.stamp) or {}
+        if args.action == "diff":
+            lines = history_module.diff(data, loaded.data)
+            if args.json:
+                print(json.dumps([line.to_dict() for line in lines], indent=2, ensure_ascii=False))
+            elif not lines:
+                print(f"la versione {number} è identica al file attuale")
+            else:
+                print(f"versione {number} ({version.stamp}) -> file attuale")
+                for line in lines:
+                    before = json.dumps(line.before, ensure_ascii=False) if line.change != "added" else "-"
+                    after = json.dumps(line.after, ensure_ascii=False) if line.change != "removed" else "-"
+                    print(f"  {line.change:<7} {line.key}: {before} -> {after}")
+            return EXIT_OK
+        history_module.restore(instance, version.stamp)
+        print(f"ripristinata la versione {number} ({version.stamp}) in {path}")
+        return EXIT_OK
+
+    print(f"umm config {args.action}: not implemented")
+    return EXIT_NOT_IMPLEMENTED
+
+
 def _cmd_tray() -> int:
     from .ui.tray import run_tray
 
@@ -835,6 +1037,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_update(args, parser)
     if args.command == "rollback":
         return _cmd_rollback(args)
+    if args.command == "config":
+        return _cmd_config(args)
     if args.command == "import-legacy":
         return _cmd_import_legacy(args)
     if args.command == "autostart":
