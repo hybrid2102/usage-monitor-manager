@@ -28,7 +28,7 @@ Fatto:
 Test della fase 7 (in corso, un passo per commit):
 - [x] A1a kind custom (merge/validazione/persistenza) + discovery `github-exe` (coppia, dormiente, nessun `environ()`) + piano di update e archivio: `tests/test_kinds_custom.py`, `tests/test_discovery_github_exe.py`, fixture `pristine_kind_registry` in `conftest.py` (663 test);
 - [x] A1b diag (argv `--verbose`, log path sotto `logs/`, stop torna in modalita normale, stop fallito non lancia nulla, `diag.json` corrotto) + `manager.log` rotante 1 MB x 3 + status file (schema completo, scrittura atomica, `generated_at`, errore GitHub nel campo `error`): `tests/test_diag.py`, `tests/test_status_file.py` (702 test);
-- [ ] A1c profili (piano/apply/dry-run, ferma solo la famiglia usage-monitor) + hotkey (parse/format/normalize, `user32` finto, conflitto);
+- [x] A1c profili (piano a tre insiemi, ferma solo la famiglia usage-monitor, gap fra due start, membri sconosciuti) + hotkey (tabelle parse/format/normalize, ciclo completo del listener con `user32` finto, conflitto 1409): `tests/test_profiles.py`, `tests/test_hotkey.py` (776 test);
 - [ ] A1d CLI `kind|diag|profile|status --write-file`.
 
 Da fare per chiudere la fase 7:
