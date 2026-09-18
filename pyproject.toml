@@ -53,3 +53,7 @@ venv = ".venv"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "real_credentials: uses the real Windows Credential Manager (own target name, deleted afterwards)",
+    "allow_network: allowed to open a real connection (no test uses it yet)",
+]

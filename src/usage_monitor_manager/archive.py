@@ -63,6 +63,7 @@ __all__ = [
     "archive_dir",
     "archive_exe",
     "current_release_tag",
+    "current_version",
     "find",
     "list_archived",
     "prune",
@@ -231,6 +232,17 @@ def find(exe_path: Path | str, version: str | None = None) -> ArchivedVersion | 
         if versions.format_version(item.version) == wanted:
             return item
     return None
+
+
+def current_version(exe_path: Path | str) -> str | None:
+    """The version the manager last installed, per the manifest.
+
+    Used as a fallback when the PE carries no version resource, so a restore
+    still archives the displaced build under a real number instead of
+    ``unknown``.
+    """
+    current = _as_dict(_read_manifest(exe_path).get("current"))
+    return _as_text(current.get("version"))
 
 
 def current_release_tag(exe_path: Path | str) -> str | None:
@@ -445,7 +457,7 @@ def restore(
         return result(False, f"no archived build{asked} for {exe.name} (available: {available})")
 
     swap = swapper if swapper is not None else _Swapper(on_retry=lambda message: log("restore", message))
-    current = versions.display_version(versions.exe_version(exe))
+    current = versions.display_version(versions.exe_version(exe)) or current_version(exe)
     log("plan", f"restoring {exe.name} {current or '?'} -> {target.version} from {target.path.name}")
 
     was_running = [instance for instance in affected if instance.is_running]

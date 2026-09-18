@@ -16,6 +16,15 @@ const state = {
   updates: { available: [], plans: [], last_check: null, error: null },
   selected: null,
   busy: false,
+  watchdog: { count: 0, events: [] },
+  archived: [],
+  manager: null,
+};
+
+const WATCHDOG_LABELS = {
+  crashed: "chiusa da sola",
+  duplicate: "processi doppi",
+  orphan: "coppia incompleta",
 };
 
 /* ------------------------------------------------------------- helpers */
@@ -109,7 +118,7 @@ function renderInstances() {
     const tr = document.createElement("tr");
     tr.className = "empty";
     const td = document.createElement("td");
-    td.colSpan = 11;
+    td.colSpan = 12;
     td.textContent = "Nessuna istanza trovata";
     tr.appendChild(td);
     body.appendChild(tr);
@@ -178,6 +187,18 @@ function renderInstances() {
     autostart.appendChild(toggle);
     tr.appendChild(autostart);
 
+    const health = document.createElement("td");
+    if (row.watchdog) {
+      const badge = document.createElement("span");
+      badge.className = "badge-warn";
+      badge.textContent = WATCHDOG_LABELS[row.watchdog] || row.watchdog;
+      badge.title = (watchdogEventsFor(row.id)[0] || {}).detail || "";
+      health.appendChild(badge);
+    } else {
+      health.textContent = row.is_running ? "ok" : "—";
+    }
+    tr.appendChild(health);
+
     const actions = document.createElement("td");
     actions.className = "actions-col";
     const buttons = [
@@ -195,6 +216,13 @@ function renderInstances() {
       button.addEventListener("click", handler);
       actions.appendChild(button);
     });
+    if (row.watchdog) {
+      const repair = document.createElement("button");
+      repair.className = "btn small";
+      repair.textContent = "Ripara";
+      repair.addEventListener("click", () => repairInstance(row.id));
+      actions.appendChild(repair);
+    }
     if (row.update_available) {
       const button = document.createElement("button");
       button.className = "btn small primary";
@@ -213,6 +241,19 @@ function renderInstances() {
   $("dashboard-hint").textContent =
     running + " di " + state.rows.length + " in esecuzione · ultimo controllo aggiornamenti: " +
     formatDate(state.updates.last_check);
+}
+
+function watchdogEventsFor(id) {
+  return (state.watchdog.events || []).filter((event) => event.id === id);
+}
+
+async function repairInstance(id) {
+  setBusy(true);
+  log("manager-log", "riparazione di " + id + "…");
+  const result = await call("repair_instance", id);
+  if (result) log("manager-log", "  " + text(result.detail, JSON.stringify(result)));
+  setBusy(false);
+  await refresh();
 }
 
 async function act(action, id) {
@@ -242,6 +283,15 @@ async function refresh() {
   if (rows) state.rows = rows;
   const updates = await call("get_update_state");
   if (updates) state.updates = updates;
+  const findings = await call("get_watchdog_state");
+  state.watchdog = findings && findings.events ? findings : { count: 0, events: [] };
+  const worst = {};
+  (state.watchdog.events || []).forEach((event) => {
+    if (!worst[event.id] || event.severity > worst[event.id].severity) worst[event.id] = event;
+  });
+  state.rows.forEach((row) => {
+    row.watchdog = worst[row.id] ? worst[row.id].type : null;
+  });
   renderInstances();
   renderUpdates();
 }
@@ -284,6 +334,7 @@ function renderUpdates() {
 
 async function selectUpdate(exePath) {
   state.selected = exePath;
+  await loadArchive();
   renderUpdates();
   const data = await call("get_changelog", exePath);
   if (!data || !data.tag) {
@@ -302,7 +353,76 @@ async function selectUpdate(exePath) {
 
 function renderDetail() {
   const outdated = (state.updates.available || []).some((plan) => plan.exe_path === state.selected);
+  const skipped = (state.updates.skipped || []).some((plan) => plan.exe_path === state.selected);
   $("btn-apply").disabled = state.busy || !outdated;
+  $("btn-skip").disabled = state.busy || !(outdated || skipped);
+  $("btn-skip").textContent = skipped ? "Non saltare piu'" : "Salta questa versione";
+  renderArchive();
+}
+
+function renderArchive() {
+  const host = $("archive-list");
+  if (!host) return;
+  host.textContent = "";
+  if (!state.archived.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "Nessuna build archiviata per questo eseguibile.";
+    host.appendChild(empty);
+    return;
+  }
+  state.archived.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "archive-row";
+    const label = document.createElement("span");
+    label.className = "grow";
+    label.textContent =
+      item.version +
+      " · " +
+      formatDate(item.archived_at) +
+      (item.source_release_tag ? " · " + item.source_release_tag : "");
+    const button = document.createElement("button");
+    button.className = "btn small";
+    button.textContent = "Ripristina";
+    button.disabled = state.busy || !item.exists;
+    button.addEventListener("click", () => restoreArchived(item.version));
+    row.appendChild(label);
+    row.appendChild(button);
+    host.appendChild(row);
+  });
+}
+
+async function loadArchive() {
+  if (!state.selected) {
+    state.archived = [];
+    return;
+  }
+  const items = await call("list_archived", state.selected);
+  state.archived = items || [];
+}
+
+async function restoreArchived(version) {
+  if (!state.selected) return;
+  setBusy(true);
+  log("update-log", "ripristino della " + version + "…");
+  const result = await call("restore_archived", state.selected, version);
+  if (result) log("update-log", (result.ok ? "OK: " : "ERRORE: ") + text(result.detail));
+  setBusy(false);
+  await loadArchive();
+  await refresh();
+  renderDetail();
+}
+
+async function skipSelected() {
+  const plan = planList().find((item) => item.exe_path === state.selected);
+  if (!plan) return;
+  const skipped = (state.updates.skipped || []).some((item) => item.exe_path === state.selected);
+  setBusy(true);
+  const result = await call(skipped ? "unskip_version" : "skip_version", plan.kind);
+  if (result) log("update-log", text(result.detail, JSON.stringify(result)));
+  setBusy(false);
+  await refresh();
+  renderDetail();
 }
 
 async function applyUpdate() {
@@ -338,20 +458,108 @@ async function loadManager() {
     $("manager-exe").textContent = (info.frozen ? "eseguibile: " : "da sorgente: ") + info.executable;
     $("manager-config-path").textContent = info.config_path;
     $("pref-autostart").checked = Boolean(info.autostart);
-    $("github-token").textContent = info.github_token_present
-      ? "Token GitHub: presente"
-      : "Token GitHub: assente (richieste anonime)";
-    const rate = info.rate_limit;
-    $("github-rate").textContent = rate
-      ? "rate limit: " + text(rate.remaining) + "/" + text(rate.limit) + " · reset " + formatDate(rate.reset_at)
-      : "rate limit: nessuna chiamata in questa sessione";
+    state.manager = info;
+    renderToken(info);
+    renderSelfUpdate(info.self_update);
   }
   const config = await call("get_config");
   if (config && config.preferences) {
     $("pref-notify").checked = Boolean(config.preferences.notify_updates);
     $("pref-prerelease").checked = Boolean(config.preferences.include_prerelease);
     $("pref-interval").value = config.preferences.check_interval_hours;
+    $("pref-watchdog").checked = Boolean(config.preferences.watchdog_enabled);
+    $("pref-auto-restart").checked = Boolean(config.preferences.auto_restart_crashed);
+    $("pref-archive-keep").value = config.preferences.archive_keep;
   }
+}
+
+function renderToken(info) {
+  const stored = info.github_token_stored;
+  const source = info.github_token_source;
+  $("github-token").textContent = info.github_token_present
+    ? "Token GitHub: presente" + (stored ? " (Credential Manager)" : " (variabile " + source + ")")
+    : "Token GitHub: assente (richieste anonime, 60/ora)";
+  const rate = info.rate_limit;
+  $("github-rate").textContent = rate
+    ? "rate limit: " + text(rate.remaining) + "/" + text(rate.limit) + " · reset " + formatDate(rate.reset_at)
+    : "rate limit: nessuna chiamata in questa sessione";
+  $("github-target").textContent = "credenziale: " + text(info.credential_target);
+  $("btn-token-clear").disabled = !stored;
+}
+
+function renderSelfUpdate(own) {
+  const box = $("self-update-state");
+  const version = state.manager ? state.manager.version : "";
+  if (!own) {
+    box.textContent = "Manager " + version + " · nessun controllo eseguito";
+  } else {
+    box.textContent = "Manager " + version + " · " + text(own.detail);
+  }
+  const available = Boolean(own && own.available);
+  const frozen = Boolean(state.manager && state.manager.frozen);
+  $("btn-self-apply").disabled = state.busy || !available || !frozen;
+  $("btn-self-apply").title = frozen ? "" : "disponibile solo per UsageMonitorManager.exe";
+  $("btn-self-skip").disabled = state.busy || !(own && own.tag);
+  $("btn-self-skip").textContent = own && own.skipped ? "Non saltare piu'" : "Salta questa versione";
+}
+
+async function setToken() {
+  const field = $("token-input");
+  const value = field.value;
+  if (!value.trim()) {
+    log("manager-log", "token: campo vuoto, niente da salvare");
+    return;
+  }
+  setBusy(true);
+  const result = await call("set_github_token", value);
+  field.value = ""; // the value is never shown again, here or anywhere else
+  if (result) log("manager-log", text(result.detail));
+  setBusy(false);
+  await loadManager();
+}
+
+async function clearToken() {
+  setBusy(true);
+  const result = await call("clear_github_token");
+  if (result) log("manager-log", text(result.detail));
+  setBusy(false);
+  await loadManager();
+}
+
+async function refreshRateLimit() {
+  const result = await call("get_rate_limit");
+  if (result && state.manager) {
+    state.manager.rate_limit = result.rate_limit;
+    state.manager.github_token_stored = result.token_present;
+    state.manager.github_token_source = result.token_source;
+    renderToken(state.manager);
+  }
+}
+
+async function checkSelfUpdate() {
+  setBusy(true);
+  const own = await call("check_self_update");
+  if (state.manager) state.manager.self_update = own;
+  renderSelfUpdate(own);
+  setBusy(false);
+}
+
+async function applySelfUpdate() {
+  setBusy(true);
+  $("self-progress").hidden = false;
+  $("self-progress-fill").style.width = "0%";
+  log("self-update-log", "aggiornamento del manager…");
+  const result = await call("apply_self_update");
+  if (result) log("self-update-log", (result.ok ? "OK: " : "ERRORE: ") + text(result.detail));
+  $("self-progress").hidden = true;
+  setBusy(false);
+}
+
+async function skipSelfUpdate() {
+  const own = state.manager ? state.manager.self_update : null;
+  const result = await call(own && own.skipped ? "unskip_version" : "skip_version", "manager");
+  if (result) log("manager-log", text(result.detail, JSON.stringify(result)));
+  await loadManager();
 }
 
 async function setPreference(key, value) {
@@ -1166,6 +1374,19 @@ function onEvent(payload) {
     state.updates = payload.state || state.updates;
     renderUpdates();
     renderInstances();
+  } else if (payload.type === "self_update_event") {
+    const event = payload.event || {};
+    log("self-update-log", event.step + ": " + event.message);
+    if (typeof event.progress === "number") {
+      $("self-progress").hidden = false;
+      $("self-progress-fill").style.width = Math.round(event.progress * 100) + "%";
+    }
+  } else if (payload.type === "self_update_state") {
+    if (state.manager) state.manager.self_update = payload.state;
+    renderSelfUpdate(payload.state);
+  } else if (payload.type === "watchdog") {
+    state.watchdog = payload.state || state.watchdog;
+    renderInstances();
   }
 }
 
@@ -1194,6 +1415,13 @@ function wire() {
   wireSettings();
   $("btn-apply").addEventListener("click", applyUpdate);
   $("btn-rollback").addEventListener("click", rollback);
+  $("btn-skip").addEventListener("click", skipSelected);
+  $("btn-token-set").addEventListener("click", setToken);
+  $("btn-token-clear").addEventListener("click", clearToken);
+  $("btn-rate-refresh").addEventListener("click", refreshRateLimit);
+  $("btn-self-check").addEventListener("click", checkSelfUpdate);
+  $("btn-self-apply").addEventListener("click", applySelfUpdate);
+  $("btn-self-skip").addEventListener("click", skipSelfUpdate);
   $("btn-import-dry").addEventListener("click", () => runImport(true));
   $("btn-import").addEventListener("click", () => runImport(false));
   $("pref-autostart").addEventListener("change", async (event) => {
@@ -1209,6 +1437,9 @@ function wire() {
   $("pref-notify").addEventListener("change", (e) => setPreference("notify_updates", e.target.checked));
   $("pref-prerelease").addEventListener("change", (e) => setPreference("include_prerelease", e.target.checked));
   $("pref-interval").addEventListener("change", (e) => setPreference("check_interval_hours", Number(e.target.value)));
+  $("pref-watchdog").addEventListener("change", (e) => setPreference("watchdog_enabled", e.target.checked));
+  $("pref-auto-restart").addEventListener("change", (e) => setPreference("auto_restart_crashed", e.target.checked));
+  $("pref-archive-keep").addEventListener("change", (e) => setPreference("archive_keep", Number(e.target.value)));
 
   const hash = (window.location.hash || "").replace("#", "");
   goto(hash || "dashboard");

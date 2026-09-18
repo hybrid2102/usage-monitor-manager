@@ -50,11 +50,12 @@
                 <th>Uptime</th>
                 <th>Settings attivo</th>
                 <th>Autostart</th>
+                <th>Stato</th>
                 <th class="actions-col">Azioni</th>
               </tr>
             </thead>
             <tbody id="instances-body">
-              <tr class="empty"><td colspan="11">Caricamento&hellip;</td></tr>
+              <tr class="empty"><td colspan="12">Caricamento&hellip;</td></tr>
             </tbody>
           </table>
         </div>
@@ -77,12 +78,20 @@
                 <h2 id="update-title"></h2>
                 <div class="group">
                   <button class="btn primary" id="btn-apply">Aggiorna</button>
+                  <button class="btn" id="btn-skip">Salta questa versione</button>
                   <button class="btn danger" id="btn-rollback">Rollback</button>
                 </div>
               </div>
               <p class="hint" id="update-meta"></p>
               <div class="progress" id="progress" hidden><div class="progress-fill" id="progress-fill"></div></div>
               <article class="markdown" id="changelog"></article>
+              <h3>Versioni archiviate</h3>
+              <p class="hint">
+                Gli eseguibili sostituiti restano in <span class="mono">.umm-archive</span>
+                accanto al file aggiornato: &ldquo;Ripristina&rdquo; ferma le istanze, rimette
+                al suo posto quella build e le riavvia.
+              </p>
+              <div id="archive-list"></div>
             </div>
             <h3>Log operazione</h3>
             <pre class="code-block log" id="update-log"></pre>
@@ -203,18 +212,49 @@
               <span>Considera le prerelease</span>
             </label>
             <label class="row">
+              <input type="checkbox" id="pref-watchdog" />
+              <span>Sorveglia le istanze (crash, duplicati, coppie incomplete)</span>
+            </label>
+            <label class="row">
+              <input type="checkbox" id="pref-auto-restart" />
+              <span>Riavvia da solo un&rsquo;istanza che si e&rsquo; chiusa</span>
+            </label>
+            <label class="row">
               <span>Controlla ogni</span>
               <input type="number" id="pref-interval" min="1" max="168" />
               <span>ore</span>
+            </label>
+            <label class="row">
+              <span>Build conservate in .umm-archive</span>
+              <input type="number" id="pref-archive-keep" min="0" max="20" />
             </label>
           </div>
           <div class="panel">
             <h2>GitHub</h2>
             <p id="github-token"></p>
             <p class="hint" id="github-rate"></p>
-            <p class="hint">
-              L&rsquo;inserimento del token (Credential Manager) arriva nella fase 6.
-            </p>
+            <label class="row">
+              <input type="password" id="token-input" placeholder="ghp_&hellip;" autocomplete="off" />
+            </label>
+            <div class="group">
+              <button class="btn primary" id="btn-token-set">Imposta token&hellip;</button>
+              <button class="btn danger" id="btn-token-clear">Rimuovi token</button>
+              <button class="btn" id="btn-rate-refresh">Aggiorna rate limit</button>
+            </div>
+            <p class="hint" id="github-target"></p>
+          </div>
+          <div class="panel">
+            <h2>Aggiornamento del manager</h2>
+            <p id="self-update-state"></p>
+            <div class="group">
+              <button class="btn" id="btn-self-check">Controlla</button>
+              <button class="btn primary" id="btn-self-apply">Aggiorna il manager</button>
+              <button class="btn" id="btn-self-skip">Salta questa versione</button>
+            </div>
+            <div class="progress" id="self-progress" hidden>
+              <div class="progress-fill" id="self-progress-fill"></div>
+            </div>
+            <pre class="code-block log" id="self-update-log"></pre>
           </div>
           <div class="panel">
             <h2>Importazione configurazione precedente</h2>

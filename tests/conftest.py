@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from usage_monitor_manager import github, secrets
+from usage_monitor_manager import github, secrets, watchdog
 
 
 @pytest.fixture(autouse=True)
@@ -45,3 +45,14 @@ def no_real_credentials(request: pytest.FixtureRequest) -> Any:
         yield
     finally:
         secrets.set_store(previous)
+
+
+@pytest.fixture(autouse=True)
+def fresh_watchdog_registry() -> None:
+    """Start every test with an empty "expected down" set.
+
+    ``updater.apply`` announces its own stops to a process-wide registry; left
+    alone, a test that updates an instance would make a later watchdog test
+    believe that same instance is allowed to be missing.
+    """
+    watchdog.reset_expected()

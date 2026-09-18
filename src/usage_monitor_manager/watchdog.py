@@ -63,6 +63,7 @@ __all__ = [
     "expect_down",
     "expected_down",
     "is_expected_down",
+    "reset_expected",
 ]
 
 DEFAULT_INTERVAL_SECONDS = 30.0
@@ -149,6 +150,17 @@ def clear_expected(instance_id: str) -> None:
 def is_expected_down(instance_id: str) -> bool:
     """Shorthand for ``expected_down().is_expected(...)``."""
     return _expected.is_expected(instance_id)
+
+
+def reset_expected() -> None:
+    """Forget every announcement.
+
+    The registry is process-wide state, which is exactly what a test suite must
+    not carry between tests: an update test that announced a stop would make a
+    later watchdog test believe that instance is allowed to be missing.
+    """
+    global _expected
+    _expected = ExpectedDown()
 
 
 # --------------------------------------------------------------------------- #

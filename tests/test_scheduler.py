@@ -17,6 +17,8 @@ from usage_monitor_manager.kinds import get_kind
 from usage_monitor_manager.manager_config import ManagerConfig, Preferences
 from usage_monitor_manager.model import ReleaseInfo, UpdatePlan
 from usage_monitor_manager.scheduler import DEFAULT_FIRST_DELAY_SECONDS, UpdateScheduler
+from usage_monitor_manager.self_update import MANAGER_REPO, SelfUpdateCheck
+from usage_monitor_manager.versions import VersionStatus
 
 START = datetime(2026, 9, 18, 9, 0, tzinfo=UTC)
 
@@ -297,3 +299,118 @@ def test_declared_instances_are_untouched_by_the_scheduler(config_file: Path) ->
     config = manager_config.load(config_file)
     assert config.legacy_import_done is True
     assert config.instances[0].label == "Claude"
+
+
+# --------------------------------------------------------------------------- #
+# Phase 6: the manager's own release, skipped versions, per-repo prerelease
+# --------------------------------------------------------------------------- #
+
+
+def _self_check(*, available: bool, tag: str = "v0.8.0", skipped: bool = False) -> SelfUpdateCheck:
+    return SelfUpdateCheck(
+        status=VersionStatus.UPDATE_AVAILABLE if available else VersionStatus.UNKNOWN,
+        current_version="0.7.0",
+        detail="0.8.0 disponibile" if available else "nessuna release pubblicata",
+        release=None
+        if not available
+        else ReleaseInfo(tag=tag, version=tag.lstrip("v"), published_at=START, html_url="", body_markdown=""),
+        skipped=skipped,
+    )
+
+
+def test_the_manager_repo_is_checked_alongside_the_monitors(config_file: Path) -> None:
+    """PLAN.md section 6.5: the periodic check includes the manager itself."""
+    seen: list[bool] = []
+    notified: list[SelfUpdateCheck] = []
+    scheduler = UpdateScheduler(
+        plan_provider=lambda: [CODEX_CURRENT],
+        self_check_provider=lambda prerelease: seen.append(prerelease) or _self_check(available=True),
+        on_self_update_available=notified.append,
+        config_path=config_file,
+        clock=FakeClock(),
+    )
+    state = scheduler.check_now()
+    assert seen == [False]  # the global prerelease preference, unless overridden
+    assert state.self_update is not None and state.self_update.available is True
+    assert state.update_count == 1  # no monitor update, but the manager counts
+    assert [check.tag for check in notified] == ["v0.8.0"]
+
+
+def test_the_manager_notification_is_deduped_by_tag(config_file: Path) -> None:
+    notified: list[SelfUpdateCheck] = []
+    scheduler = UpdateScheduler(
+        plan_provider=lambda: [],
+        self_check_provider=lambda prerelease: _self_check(available=True),
+        on_self_update_available=notified.append,
+        config_path=config_file,
+        clock=FakeClock(),
+    )
+    scheduler.check_now()
+    scheduler.check_now()
+    scheduler.check_now()
+    assert len(notified) == 1
+
+    scheduler.forget_notifications()
+    scheduler.check_now()
+    assert len(notified) == 2
+
+
+def test_a_skipped_manager_release_neither_counts_nor_notifies(config_file: Path) -> None:
+    notified: list[SelfUpdateCheck] = []
+    scheduler = UpdateScheduler(
+        plan_provider=lambda: [],
+        self_check_provider=lambda prerelease: _self_check(available=True, skipped=True),
+        on_self_update_available=notified.append,
+        config_path=config_file,
+        clock=FakeClock(),
+    )
+    state = scheduler.check_now()
+    assert state.update_count == 0
+    assert notified == []
+
+
+def test_skipped_monitor_updates_are_reported_separately(config_file: Path) -> None:
+    manager_config.save(
+        ManagerConfig(skipped_versions={COPILOT_OUTDATED.kind.repo: COPILOT_OUTDATED.target.tag}),
+        config_file,
+    )
+    scheduler = UpdateScheduler(
+        check_self_update=False,
+        plan_provider=lambda: [COPILOT_OUTDATED],
+        config_path=config_file,
+        clock=FakeClock(),
+    )
+    state = scheduler.check_now()
+    assert state.available == ()
+    assert state.skipped == (COPILOT_OUTDATED,)  # visible, just not offered
+    assert state.to_dict()["skipped"][0]["kind"] == "copilot"
+
+
+def test_a_per_repo_prerelease_override_reaches_the_self_check(config_file: Path) -> None:
+    manager_config.save(ManagerConfig(prerelease_repos={MANAGER_REPO: True}), config_file)
+    seen: list[bool] = []
+    scheduler = UpdateScheduler(
+        plan_provider=lambda: [],
+        self_check_provider=lambda prerelease: seen.append(prerelease) or _self_check(available=False),
+        config_path=config_file,
+        clock=FakeClock(),
+    )
+    scheduler.check_now()
+    assert seen == [True]
+
+
+def test_a_failing_self_check_does_not_break_the_round(config_file: Path) -> None:
+    def explode(prerelease: bool) -> SelfUpdateCheck:
+        raise RuntimeError("boom")
+
+    scheduler = UpdateScheduler(
+        plan_provider=lambda: [CODEX_CURRENT],
+        self_check_provider=explode,
+        config_path=config_file,
+        clock=FakeClock(),
+    )
+    state = scheduler.check_now()
+    assert state.plans == (CODEX_CURRENT,)  # the monitors were still checked
+    assert state.self_update is not None
+    assert state.self_update.status is VersionStatus.UNKNOWN
+    assert state.self_update.error == "boom"
