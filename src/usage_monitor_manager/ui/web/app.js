@@ -443,18 +443,46 @@ function wire() {
   goto(hash || "dashboard");
 }
 
-function boot() {
-  wire();
-  loadManager();
-  refresh();
+/* The bridge (window.pywebview.api) is injected asynchronously and the
+ * `pywebviewready` event can fire either before or after this script runs.
+ * Wiring the DOM needs no bridge and happens at once; loading the data waits
+ * for the bridge, polling as a fallback for the case where the event was
+ * missed. Without this the first refresh() runs against a missing bridge and
+ * the dashboard stays empty until the user clicks something. */
+function whenBridgeReady(callback) {
+  let done = false;
+  const fire = () => {
+    if (done) return;
+    done = true;
+    callback();
+  };
+  if (api()) {
+    fire();
+    return;
+  }
+  window.addEventListener("pywebviewready", fire);
+  let attempts = 0;
+  const timer = setInterval(() => {
+    attempts += 1;
+    if (api() || attempts > 100) {
+      clearInterval(timer);
+      fire();
+    }
+  }, 100);
 }
 
-if (window.pywebview) {
-  window.addEventListener("pywebviewready", boot);
-  // pywebviewready may already have fired before this script ran
-  if (window.pywebview.api) setTimeout(boot, 0);
+function boot() {
+  wire();
+  whenBridgeReady(() => {
+    loadManager();
+    refresh();
+  });
+}
+
+if (document.readyState === "loading") {
+  window.addEventListener("DOMContentLoaded", boot);
 } else {
-  window.addEventListener("load", boot);
+  boot();
 }
 
 /* ---------------------------------------------------- markdown (tiny) */
