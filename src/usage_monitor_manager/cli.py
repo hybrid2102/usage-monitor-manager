@@ -47,7 +47,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from . import __version__
+from . import __version__, errors
 from .i18n import T, t
 from .identity import normalize_config_dir
 from .model import Instance, JsonDict, UpdatePlan
@@ -81,29 +81,32 @@ __all__ = [
     "select_instances",
 ]
 
-EXIT_OK = 0
+# The exit codes live in errors.py, next to the exception hierarchy that maps
+# onto them (PLAN.md section 7, phase 8); they are re-exported here because
+# `from .cli import EXIT_FAILED` is what every caller and test already writes.
+EXIT_OK = errors.EXIT_OK
 """Everything the command was asked to do succeeded."""
 
-EXIT_FAILED = 1
+EXIT_FAILED = errors.EXIT_FAILED
 """At least one operation failed."""
 
-EXIT_NOT_IMPLEMENTED = 2
+EXIT_NOT_IMPLEMENTED = errors.EXIT_NOT_IMPLEMENTED
 """Exit code used by every not-yet-implemented handler."""
 
-EXIT_NO_MATCH = 3
+EXIT_NO_MATCH = errors.EXIT_NO_MATCH
 """No instance matched the selectors."""
 
-EXIT_NETWORK = 3
+EXIT_NETWORK = errors.EXIT_NETWORK
 """``umm check`` / ``umm update`` could not reach GitHub (or hit the rate limit)."""
 
-EXIT_UNVERIFIED = 4
+EXIT_UNVERIFIED = errors.EXIT_UNVERIFIED
 """An update was skipped because GitHub publishes no sha256 for its asset.
 
 Only produced by the unattended path (``--yes``): interactively the user is
 asked, and ``--allow-unverified`` opts back in explicitly.
 """
 
-EXIT_UPDATES_AVAILABLE = 10
+EXIT_UPDATES_AVAILABLE = errors.EXIT_UPDATES_AVAILABLE
 """``umm check`` exit code when at least one update is available."""
 
 
@@ -166,6 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the full ``umm`` argument parser."""
     parser = argparse.ArgumentParser(prog="umm", description=T["app.name"])
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--debug", action="store_true", help=T["cli.help.debug"])
     parser.add_argument(
         "--post-update",
         metavar="PID",
@@ -1943,7 +1947,36 @@ def _attach_console_if_frozen(args: Sequence[str]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Entry point for the ``umm`` console script."""
+    """Entry point for the ``umm`` console script.
+
+    The only thing this adds to :func:`_dispatch` is the error policy of
+    PLAN.md phase 8: an :class:`errors.UmmError` becomes its own exit code plus
+    ``message`` and ``hint`` on stderr, an unexpected exception becomes one
+    generic line with the traceback in ``manager.log``, and ``--debug`` lets
+    either through as a real traceback.
+    """
+    debug = any(token == "--debug" for token in (sys.argv[1:] if argv is None else argv))
+    try:
+        return _dispatch(argv)
+    except errors.UmmError as error:
+        if debug:
+            raise
+        for line in error.lines:
+            print(line, file=sys.stderr)
+        return error.code
+    except KeyboardInterrupt:
+        print("", file=sys.stderr)
+        return EXIT_FAILED
+    except Exception as error:  # noqa: BLE001 - the last line of defence
+        if debug:
+            raise
+        print(errors.report_unexpected(error, context="cli"), file=sys.stderr)
+        print(T["error.debug_hint"], file=sys.stderr)
+        return errors.exit_code_for(error)
+
+
+def _dispatch(argv: Sequence[str] | None = None) -> int:
+    """Parse the arguments and run the command they name."""
     raw_args = list(sys.argv[1:] if argv is None else argv)
     _attach_console_if_frozen(raw_args)
     reconfigure_stdout()

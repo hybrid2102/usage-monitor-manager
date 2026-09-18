@@ -419,5 +419,9 @@
   "cli.autostart_yes": "yes ({command})",
   "cli.autostart_no": "no",
   "cli.autostart_no_instance": "umm autostart: no instance with id {id}",
-  "cli.config_problem": "manager-config.json: {problem}"
+  "cli.config_problem": "manager-config.json: {problem}",
+  "error.unexpected": "Unexpected error: the details, traceback included, are in logs\\manager.log",
+  "error.debug_hint": "Run it again with --debug to see the traceback.",
+  "cli.help.debug": "print the traceback instead of just the error message",
+  "error.hint_profile_list": "See the profiles you have with 'umm profile list'."
 }

@@ -39,7 +39,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from .. import __version__, i18n, manager_config
+from .. import __version__, errors, i18n, manager_config
 from ..i18n import T, t
 from ..model import Instance, JsonDict
 
@@ -314,6 +314,7 @@ class JsApi:
                 return plan
         return None
 
+    @errors.guarded
     def apply_update(self, exe_path: str) -> JsonDict:
         """Download, verify, swap and restart, streaming every step to the page.
 
@@ -335,6 +336,7 @@ class JsApi:
             self._scheduler.check_now()
         return dict(result.to_dict())
 
+    @errors.guarded
     def rollback(self, exe_path: str) -> JsonDict:
         """Restore the ``.bak`` left by the last update of that executable."""
         from .. import updater
@@ -467,6 +469,7 @@ class JsApi:
         except KeyError as error:
             return {"ok": False, "detail": str(error)}
 
+    @errors.guarded
     def save_settings(self, instance_id: str, data: JsonDict, restart: bool = False) -> JsonDict:
         """Validate, write (``.bak`` + history) and optionally restart.
 
@@ -750,6 +753,7 @@ class JsApi:
 
     # -- GitHub token (PLAN.md section 6.5-bis) -------------------------------
 
+    @errors.guarded
     def set_github_token(self, token: str) -> JsonDict:
         """Store the token; the value is never sent back to the page."""
         from .. import secrets
@@ -797,6 +801,7 @@ class JsApi:
         self._emit({"type": "self_update_state", "state": state.to_dict()})
         return dict(state.to_dict())
 
+    @errors.guarded
     def apply_self_update(self) -> JsonDict:
         """Replace the manager and hand over to the new process.
 
@@ -910,6 +915,7 @@ class JsApi:
         """The findings of the last watchdog pass; empty when it is not running."""
         return {} if self._watchdog is None else dict(self._watchdog.state.to_dict())
 
+    @errors.guarded
     def repair_instance(self, instance_id: str) -> JsonDict:
         """Act on the worst anomaly of one instance ("Ripara")."""
         if self._watchdog is None:
@@ -997,6 +1003,7 @@ class JsApi:
         plan = profiles.plan(profile, self._discover())
         return {"ok": True, **plan.to_dict(), "steps": profiles.describe(plan)}
 
+    @errors.guarded
     def apply_profile(self, name: str) -> JsonDict:
         """Start the profile's instances and stop the other monitors."""
         from .. import profiles

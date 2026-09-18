@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import manager_config, process_control
+from .errors import NoMatchError
+from .i18n import T, t
 from .model import Instance, JsonDict
 
 __all__ = [
@@ -209,11 +211,11 @@ def apply_profile(
     """Look the profile up, plan it against the machine, apply it.
 
     Raises:
-        KeyError: when no profile carries that name.
+        NoMatchError: when no profile carries that name (exit code 3).
     """
     profile = resolve(name, path)
     if profile is None:
-        raise KeyError(f"unknown profile {name!r}")
+        raise NoMatchError(t("cli.no_such_profile", name=name), hint=T["error.hint_profile_list"])
     from .discovery import discover  # noqa: PLC0415 - imported late, like the rest of the CLI paths
 
     known = list(instances) if instances is not None else discover()

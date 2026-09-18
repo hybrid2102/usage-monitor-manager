@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from .. import __version__, diag, i18n, legacy, manager_config, platform
+from .. import __version__, diag, errors, i18n, legacy, manager_config, platform
 from ..i18n import T, t
 from ..model import JsonDict
 from ..scheduler import UpdateScheduler
@@ -498,8 +498,11 @@ class TrayApp:
         def target() -> None:
             try:
                 work()
-            except Exception as error:  # noqa: BLE001 - reported as a notification
-                self.notify(t("tray.action_failed", action=name, error=error), T["app.name"])
+            except errors.UmmError as error:
+                _log.warning("%s failed: %s", name, error.message)
+                self.notify(t("tray.action_failed", action=name, error=error.message), T["app.name"])
+            except Exception as error:  # noqa: BLE001 - logged with its traceback, shown as one line
+                self.notify(errors.report_unexpected(error, context="tray"), T["app.name"])
             finally:
                 self.refresh_icon()
 

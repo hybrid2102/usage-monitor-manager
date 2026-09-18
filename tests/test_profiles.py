@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from usage_monitor_manager import manager_config, process_control, profiles
+from usage_monitor_manager import errors, manager_config, process_control, profiles
 from usage_monitor_manager.kinds import get_kind
 from usage_monitor_manager.manager_config import Profile
 from usage_monitor_manager.model import Instance, ProcessPair
@@ -282,7 +282,7 @@ def test_profiles_round_trip_through_the_config_file() -> None:
 
 
 def test_apply_profile_refuses_an_unknown_name(control: FakeControl) -> None:
-    with pytest.raises(KeyError, match="unknown profile"):
+    with pytest.raises(errors.NoMatchError, match="nessun profilo"):
         profiles.apply_profile("nope", [])
     assert control.calls == []
 
