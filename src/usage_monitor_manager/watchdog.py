@@ -335,6 +335,10 @@ class Watchdog:
 
     # -- state ---------------------------------------------------------------
 
+    def set_event_callback(self, on_events: EventCallback | None) -> None:
+        """Point the findings at a listener (the tray does this once)."""
+        self._on_events = on_events
+
     @property
     def state(self) -> WatchdogState:
         with self._lock:

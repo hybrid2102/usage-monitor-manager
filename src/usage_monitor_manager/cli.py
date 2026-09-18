@@ -3,10 +3,19 @@
 The CLI is the primary consumer of the core modules: tray and window are
 clients of the same functions. Implemented so far: ``--version``, ``list``
 (Phase 1), ``restart`` / ``stop`` / ``start`` (Phase 2),
-``check`` / ``update`` / ``rollback`` (Phase 3) and
-``tray`` / ``import-legacy`` / ``autostart`` (Phase 4). The remaining
-subcommands are wired up - so the surface is frozen and testable - and exit
-with ``EXIT_NOT_IMPLEMENTED``.
+``check`` / ``update`` / ``rollback`` (Phase 3),
+``tray`` / ``import-legacy`` / ``autostart`` (Phase 4), ``config`` (Phase 5)
+and ``self-update`` / ``token`` / ``archive`` / ``skip`` / ``unskip`` /
+``status`` plus ``--post-update`` (Phase 6).
+
+Two of them are meant for a machine rather than a person.
+``umm update --all --yes`` is the Task Scheduler entry point of PLAN.md
+section 9.10: it never prompts, refuses an executable GitHub publishes no
+sha256 for (exit 4) instead of asking, and with ``--log FILE`` appends one JSON
+object per step so a scheduled run leaves an audit trail.
+``umm status --json`` (section 9.11) is the statusline entry point: instances,
+the stored update bookkeeping and a watchdog pass, without a single network
+call unless ``--check`` is given.
 
 ``umm update`` prints the release notes *before* the download starts and then
 redraws a single progress line in place, so the changelog stays readable for
@@ -27,7 +36,7 @@ import json
 import os
 import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -46,8 +55,10 @@ __all__ = [
     "EXIT_NOT_IMPLEMENTED",
     "EXIT_NETWORK",
     "EXIT_NO_MATCH",
+    "EXIT_UNVERIFIED",
     "EXIT_UPDATES_AVAILABLE",
     "RUN_MARKERS",
+    "format_archive_table",
     "build_parser",
     "convert_markdown_links",
     "format_check_table",
@@ -74,10 +85,21 @@ EXIT_NO_MATCH = 3
 EXIT_NETWORK = 3
 """``umm check`` / ``umm update`` could not reach GitHub (or hit the rate limit)."""
 
+EXIT_UNVERIFIED = 4
+"""An update was skipped because GitHub publishes no sha256 for its asset.
+
+Only produced by the unattended path (``--yes``): interactively the user is
+asked, and ``--allow-unverified`` opts back in explicitly.
+"""
+
 EXIT_UPDATES_AVAILABLE = 10
 """``umm check`` exit code when at least one update is available."""
 
 _KIND_CHOICES = ("claude", "copilot", "codex")
+_SKIP_CHOICES = ("claude", "copilot", "codex", "manager")
+"""``umm skip`` also accepts ``manager``: the manager skips its own releases."""
+_TOKEN_ACTIONS = ("set", "clear", "status")
+_ARCHIVE_ACTIONS = ("list", "prune")
 _PROCESS_COMMANDS = ("restart", "stop", "start")
 _AUTOSTART_ACTIONS = ("on", "off", "status")
 
@@ -115,6 +137,12 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the full ``umm`` argument parser."""
     parser = argparse.ArgumentParser(prog="umm", description="Usage Monitor Manager")
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument(
+        "--post-update",
+        metavar="PID",
+        type=int,
+        help="internal: wait for PID to exit, drop the .bak, then run the tray (see self_update.py)",
+    )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     listing = subparsers.add_parser("list", help="list discovered instances")
@@ -139,6 +167,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument("--changelog", action="store_true", help="also print the release notes")
     check.add_argument("--prerelease", action="store_true", help="consider prereleases too")
+    check.add_argument(
+        "--include-skipped",
+        action="store_true",
+        help="report a release the user skipped as available instead of 'skipped'",
+    )
     _add_json(check)
 
     update = subparsers.add_parser("update", help="download and apply a monitor update")
@@ -154,6 +187,17 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--no-restart", action="store_true", help="do not restart the instances")
     update.add_argument("--dry-run", action="store_true", help="print every step, change nothing")
     update.add_argument("--prerelease", action="store_true", help="consider prereleases too")
+    update.add_argument(
+        "--include-skipped",
+        action="store_true",
+        help="update even a release the user chose to skip",
+    )
+    update.add_argument(
+        "--allow-unverified",
+        action="store_true",
+        help="with --yes, install an asset GitHub publishes no sha256 for (default: skip it, exit 4)",
+    )
+    update.add_argument("--log", metavar="FILE", help="append one JSON object per step to FILE")
     _add_json(update)
 
     rollback = subparsers.add_parser("rollback", help="restore the previous executable from its .bak")
@@ -165,8 +209,50 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="roll back this kind's executable (repeatable)",
     )
+    rollback.add_argument(
+        "--version",
+        dest="target_version",
+        metavar="V",
+        help="restore this archived version (default: the previous executable)",
+    )
     rollback.add_argument("--no-restart", action="store_true", help="do not restart the instances")
     _add_json(rollback)
+
+    archive = subparsers.add_parser("archive", help="inspect or prune the kept executables (.umm-archive)")
+    archive.add_argument("action", choices=_ARCHIVE_ACTIONS)
+    archive.add_argument(
+        "--kind",
+        action="append",
+        choices=_KIND_CHOICES,
+        metavar="KEY",
+        help="limit to this kind (repeatable)",
+    )
+    archive.add_argument("--keep", type=int, metavar="N", help="for prune: how many to keep (default: preference)")
+    _add_json(archive)
+
+    for name, help_text in (
+        ("skip", "never offer the latest release of a kind again"),
+        ("unskip", "offer the skipped release again"),
+    ):
+        skip = subparsers.add_parser(name, help=help_text)
+        skip.add_argument(
+            "--kind",
+            action="append",
+            choices=_SKIP_CHOICES,
+            metavar="KEY",
+            required=True,
+            help="claude | copilot | codex | manager (repeatable)",
+        )
+        _add_json(skip)
+
+    token = subparsers.add_parser("token", help="manage the GitHub token in the Windows Credential Manager")
+    token.add_argument("action", choices=_TOKEN_ACTIONS)
+    token.add_argument(
+        "--from-env",
+        metavar="VAR",
+        help="for set: read the token from this environment variable instead of stdin",
+    )
+    _add_json(token)
 
     config = subparsers.add_parser("config", help="inspect or edit instance settings")
     config.add_argument("action", choices=CONFIG_ACTIONS)
@@ -181,9 +267,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     self_update = subparsers.add_parser("self-update", help="update the manager itself")
     self_update.add_argument("--check-only", action="store_true", help="only report availability")
+    self_update.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    self_update.add_argument("--dry-run", action="store_true", help="print every step, change nothing")
+    self_update.add_argument("--prerelease", action="store_true", help="consider prereleases too")
     _add_json(self_update)
 
     status = subparsers.add_parser("status", help="health summary for scripts and statuslines")
+    status.add_argument("--check", action="store_true", help="also ask GitHub (the default is offline)")
     _add_json(status)
 
     subparsers.add_parser("tray", help="run the tray icon (the default when started with no arguments)")
@@ -530,21 +620,28 @@ def _published(plan: UpdatePlan) -> str:
     return "-" if published is None else published.astimezone().strftime("%Y-%m-%d")
 
 
-def format_check_table(plans: Sequence[UpdatePlan]) -> str:
-    """Render the check result: kind, exe, local, latest, status, published date."""
+def format_check_table(plans: Sequence[UpdatePlan], skipped: Sequence[str] = ()) -> str:
+    """Render the check result: kind, exe, local, latest, status, published date.
+
+    ``skipped`` holds the executable paths whose pending release the user chose
+    to skip (PLAN.md section 9.5); their status reads ``skipped`` instead of
+    ``update_available``, which is what makes the decision visible.
+    """
     from .updater import plan_status
 
     if not plans:
         return "no usage-monitor executable to check"
+    ignored = {_normcase(path) for path in skipped}
     rows: list[tuple[str, ...]] = [_CHECK_COLUMNS]
     for plan in plans:
+        status = "skipped" if _normcase(plan.exe_path) in ignored else str(plan_status(plan))
         rows.append(
             (
                 plan.kind.display_name,
                 str(plan.exe_path),
                 display_version(plan.current_version) or "?",
                 plan.target.version or "?",
-                str(plan_status(plan)),
+                status,
                 _published(plan),
             )
         )
@@ -555,10 +652,33 @@ def format_check_table(plans: Sequence[UpdatePlan]) -> str:
 
 
 def _build_plans(kinds: Sequence[str] | None, *, prerelease: bool) -> list[UpdatePlan]:
+    from . import manager_config
     from .discovery import discover
     from .updater import plan_updates
 
-    return list(plan_updates(discover(), kinds=kinds, include_prerelease=prerelease))
+    config = manager_config.load()
+    return list(
+        plan_updates(
+            discover(),
+            kinds=kinds,
+            include_prerelease=prerelease,
+            prerelease_for=None if prerelease else config.include_prerelease_for,
+        )
+    )
+
+
+def _skipped_plans(plans: Sequence[UpdatePlan]) -> list[UpdatePlan]:
+    """The plans whose pending tag the user asked never to be offered again."""
+    from . import manager_config
+    from .updater import plan_status
+    from .versions import VersionStatus
+
+    config = manager_config.load()
+    return [
+        plan
+        for plan in plans
+        if plan_status(plan) is VersionStatus.UPDATE_AVAILABLE and config.is_skipped(plan.kind.repo, plan.target.tag)
+    ]
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
@@ -572,19 +692,28 @@ def _cmd_check(args: argparse.Namespace) -> int:
         print(f"umm check: {error}", file=sys.stderr)
         return EXIT_NETWORK
 
+    skipped = [] if args.include_skipped else _skipped_plans(plans)
+    ignored = {_normcase(plan.exe_path) for plan in skipped}
     if args.json:
         payload: list[JsonDict] = []
         for plan in plans:
             entry = plan.to_dict()
-            entry["status"] = str(plan_status(plan))
+            is_skipped = _normcase(plan.exe_path) in ignored
+            entry["status"] = "skipped" if is_skipped else str(plan_status(plan))
+            entry["skipped"] = is_skipped
             payload.append(entry)
         print(json.dumps(payload, indent=2))
     else:
-        print(format_check_table(plans))
+        print(format_check_table(plans, [str(plan.exe_path) for plan in skipped]))
         if args.changelog:
             for plan in plans:
                 _print_changelog(plan)
-    return EXIT_UPDATES_AVAILABLE if any(plan_status(p) is VersionStatus.UPDATE_AVAILABLE for p in plans) else 0
+    available = [
+        plan
+        for plan in plans
+        if plan_status(plan) is VersionStatus.UPDATE_AVAILABLE and _normcase(plan.exe_path) not in ignored
+    ]
+    return EXIT_UPDATES_AVAILABLE if available else 0
 
 
 class _ProgressPrinter:
@@ -613,6 +742,45 @@ class _ProgressPrinter:
         print(f"  {event.message}")
 
 
+class _StepLog:
+    """Append one JSON object per step to ``--log FILE`` (PLAN.md section 9.10).
+
+    A scheduled update runs with no console attached, so the log file is the
+    only record there is. Every line is self-contained (timestamp, executable,
+    step, message) and a file that cannot be written degrades to a warning on
+    stderr rather than aborting the update.
+    """
+
+    def __init__(self, path: str | None) -> None:
+        self.path = Path(path) if path else None
+        self._failed = False
+
+    def write(self, payload: JsonDict) -> None:
+        if self.path is None or self._failed:
+            return
+        from datetime import UTC, datetime
+
+        entry = {"ts": datetime.now(tz=UTC).isoformat(), **payload}
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError as error:
+            self._failed = True
+            print(f"umm: cannot write the log {self.path}: {error}", file=sys.stderr)
+
+    def event(self, plan: UpdatePlan, event: UpdateEvent) -> None:
+        self.write(
+            {
+                "kind": plan.kind.key,
+                "exe_path": str(plan.exe_path),
+                "step": event.step,
+                "message": event.message,
+                "progress": event.progress,
+            }
+        )
+
+
 def _confirm(question: str) -> bool:
     try:
         answer = input(f"{question} [y/N] ").strip().casefold()
@@ -637,6 +805,15 @@ def _cmd_update(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
         return EXIT_NETWORK
 
     outdated = [p for p in plans if plan_status(p) is VersionStatus.UPDATE_AVAILABLE]
+    step_log = _StepLog(getattr(args, "log", None))
+    if not args.include_skipped:
+        ignored = {_normcase(plan.exe_path) for plan in _skipped_plans(plans)}
+        for plan in [p for p in outdated if _normcase(p.exe_path) in ignored]:
+            message = f"{plan.kind.key}: {plan.target.tag} skipped by the user (--include-skipped to override)"
+            step_log.write({"kind": plan.kind.key, "step": "skip", "message": message})
+            if not args.json:
+                print(message)
+        outdated = [p for p in outdated if _normcase(p.exe_path) not in ignored]
     if not outdated:
         message = "nothing to update: every executable is already up to date"
         print(json.dumps({"action": "update", "plans": [], "detail": message}, indent=2) if args.json else message)
@@ -658,6 +835,7 @@ def _cmd_update(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
 
     results: list[JsonDict] = []
     failed = False
+    unverified = False
     tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
     for plan in outdated:
         if not args.json:
@@ -666,26 +844,83 @@ def _cmd_update(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
             print("skipped")
             continue
         printer = _ProgressPrinter(tty=tty) if not args.json else None
+
+        def report(
+            event: UpdateEvent,
+            current: UpdatePlan = plan,
+            show: _ProgressPrinter | None = printer,
+        ) -> None:
+            step_log.event(current, event)
+            if show is not None:
+                show(event)
+
         result = apply_plan(
             plan,
-            on_event=printer,
-            confirm_unverified=(lambda: True)
-            if args.yes
-            else (lambda: _confirm("no sha256 published; install anyway?")),
+            on_event=report,
+            confirm_unverified=_unverified_policy(args),
             restart=restart,
         )
         results.append(result.to_dict())
-        failed = failed or not result.ok
+        skipped_unverified = (
+            not result.ok and result.integrity is not None and result.integrity.unverifiable and not result.stopped
+        )
+        unverified = unverified or skipped_unverified
+        failed = failed or (not result.ok and not skipped_unverified)
+        step_log.write(
+            {
+                "kind": plan.kind.key,
+                "exe_path": str(plan.exe_path),
+                "step": "result",
+                "ok": result.ok,
+                "message": result.detail,
+                "from_version": result.from_version,
+                "to_version": result.to_version,
+            }
+        )
         if not args.json:
             print(f"{'ok  ' if result.ok else 'FAIL'} {plan.kind.key}: {result.detail}")
     if args.json:
         print(json.dumps(results, indent=2))
-    return EXIT_FAILED if failed else 0
+    if failed:
+        return EXIT_FAILED
+    return EXIT_UNVERIFIED if unverified else 0
+
+
+def _unverified_policy(args: argparse.Namespace) -> Callable[[], bool]:
+    """What to do when GitHub publishes no sha256 for the asset.
+
+    Interactively: ask. Unattended (``--yes``): refuse, so a scheduled task
+    never installs an executable it could not verify - the caller sees exit 4
+    and can decide. ``--allow-unverified`` is the explicit opt-in.
+    """
+    if getattr(args, "allow_unverified", False):
+        return lambda: True
+    if args.yes:
+        return lambda: False
+    return lambda: _confirm("no sha256 published; install anyway?")
+
+
+def _event_printer(event: UpdateEvent) -> None:
+    """Print one update/rollback step, indented like the others."""
+    print(f"  {event.message}")
+
+
+def _exe_paths_for_kind(instances: Sequence[Instance], kind_key: str) -> list[Path]:
+    """Every distinct executable path used by the instances of one kind."""
+    paths: list[Path] = []
+    for instance in instances:
+        if instance.kind.key != kind_key or instance.exe_path is None:
+            continue
+        if all(_normcase(instance.exe_path) != _normcase(known) for known in paths):
+            paths.append(instance.exe_path)
+    return paths
 
 
 def _cmd_rollback(args: argparse.Namespace) -> int:
+    from . import archive
     from .discovery import discover
     from .kinds import get_kind
+    from .updater import backup_path_for
     from .updater import rollback as rollback_exe
 
     instances = discover()
@@ -694,22 +929,34 @@ def _cmd_rollback(args: argparse.Namespace) -> int:
     matched = False
     for key in args.kind:
         kind = get_kind(key)
-        exe_paths: list[Path] = []
-        for instance in instances:
-            if instance.kind.key == kind.key and instance.exe_path is not None:
-                if all(_normcase(instance.exe_path) != _normcase(known) for known in exe_paths):
-                    exe_paths.append(instance.exe_path)
+        exe_paths = _exe_paths_for_kind(instances, kind.key)
         if not exe_paths:
             print(f"no {kind.display_name} executable found", file=sys.stderr)
             continue
         matched = True
         for exe_path in exe_paths:
-            result = rollback_exe(
-                exe_path,
-                instances=instances,
-                restart=not args.no_restart,
-                on_event=None if args.json else lambda event: print(f"  {event.message}"),
-            )
+            report = None if args.json else _event_printer
+            wanted: str | None = args.target_version
+            # No --version means "the previous build": the .bak the updater may
+            # still be holding, else the newest entry of the archive, else the
+            # honest "nothing to roll back" of updater.rollback.
+            use_backup = wanted is None and (backup_path_for(exe_path).exists() or not archive.list_archived(exe_path))
+            if use_backup:
+                # The freshest previous build is still the .bak the updater left.
+                result = rollback_exe(
+                    exe_path,
+                    instances=instances,
+                    restart=not args.no_restart,
+                    on_event=report,
+                )
+            else:
+                result = archive.restore(
+                    exe_path,
+                    wanted,
+                    instances=instances,
+                    restart=not args.no_restart,
+                    on_event=report,
+                )
             results.append(result.to_dict())
             failed = failed or not result.ok
             if not args.json:
@@ -719,6 +966,389 @@ def _cmd_rollback(args: argparse.Namespace) -> int:
     if not matched:
         return EXIT_NO_MATCH
     return EXIT_FAILED if failed else 0
+
+
+# --------------------------------------------------------------------------- #
+# umm archive (PLAN.md section 9.4)
+# --------------------------------------------------------------------------- #
+
+_ARCHIVE_COLUMNS = ("KIND", "VERSION", "ARCHIVED", "TAG", "FILE")
+
+
+def format_archive_table(rows: Sequence[JsonDict]) -> str:
+    """Render the kept builds: kind, version, date, release tag, file name."""
+    if not rows:
+        return "no archived build (.umm-archive is empty or absent)"
+    table: list[tuple[str, ...]] = [_ARCHIVE_COLUMNS]
+    for row in rows:
+        stamp = str(row.get("archived_at") or "")
+        table.append(
+            (
+                str(row.get("kind") or "?"),
+                str(row.get("version") or "?"),
+                stamp[:19].replace("T", " ") if stamp else "-",
+                str(row.get("source_release_tag") or "-"),
+                str(row.get("file") or "?"),
+            )
+        )
+    widths = [max(len(row[column]) for row in table) for column in range(len(_ARCHIVE_COLUMNS))]
+    return "\n".join(
+        "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip() for row in table
+    )
+
+
+def _archive_targets(kinds: Sequence[str] | None) -> list[tuple[str, Path]]:
+    """``(kind key, executable)`` pairs the archive commands act on."""
+    from .discovery import discover
+    from .kinds import all_kinds
+
+    instances = discover()
+    wanted = [key.casefold() for key in kinds] if kinds else [kind.key for kind in all_kinds()]
+    targets: list[tuple[str, Path]] = []
+    for key in wanted:
+        for exe_path in _exe_paths_for_kind(instances, key):
+            targets.append((key, exe_path))
+    return targets
+
+
+def _cmd_archive(args: argparse.Namespace) -> int:
+    from . import archive, manager_config
+
+    targets = _archive_targets(args.kind)
+    if not targets:
+        message = "no usage-monitor executable found"
+        print(json.dumps({"action": args.action, "entries": [], "detail": message}, indent=2) if args.json else message)
+        return EXIT_NO_MATCH
+
+    if args.action == "list":
+        rows: list[JsonDict] = []
+        for key, exe_path in targets:
+            for item in archive.list_archived(exe_path):
+                entry = item.to_dict()
+                entry["kind"] = key
+                entry["exe_path"] = str(exe_path)
+                rows.append(entry)
+        print(json.dumps(rows, indent=2) if args.json else format_archive_table(rows))
+        return EXIT_OK
+
+    keep = args.keep if args.keep is not None else manager_config.load().preferences.archive_keep
+    removed: list[JsonDict] = []
+    for key, exe_path in targets:
+        for item in archive.prune(exe_path, keep=max(0, keep)):
+            entry = item.to_dict()
+            entry["kind"] = key
+            removed.append(entry)
+    if args.json:
+        print(json.dumps({"action": "prune", "keep": keep, "removed": removed}, indent=2))
+    else:
+        print(f"kept the {keep} newest build(s) per executable; removed {len(removed)}")
+        for entry in removed:
+            print(f"  {entry['kind']} {entry['version']} ({entry['file']})")
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# umm skip / umm unskip (PLAN.md section 9.5)
+# --------------------------------------------------------------------------- #
+
+
+def _repo_and_tag(key: str, *, prerelease: bool) -> tuple[str, str | None, str]:
+    """``(repo, latest tag, label)`` for one ``--kind`` value, ``manager`` included."""
+    from .kinds import get_kind
+    from .self_update import MANAGER_REPO, check_self
+
+    if key == "manager":
+        state = check_self(include_prerelease=prerelease)
+        return MANAGER_REPO, state.tag, "Manager"
+    kind = get_kind(key)
+    plans = _build_plans([key], prerelease=prerelease)
+    tag = plans[0].target.tag if plans else None
+    return kind.repo, tag, kind.display_name
+
+
+def _cmd_skip(args: argparse.Namespace, *, skip: bool) -> int:
+    from . import manager_config
+    from .github import GitHubError
+
+    rows: list[JsonDict] = []
+    failed = False
+    for key in args.kind:
+        if not skip:
+            repo = _repo_for(key)
+            manager_config.unskip_version(repo)
+            rows.append({"kind": key, "repo": repo, "skipped": None})
+            if not args.json:
+                print(f"{key}: the skipped release is offered again")
+            continue
+        try:
+            repo, tag, label = _repo_and_tag(key, prerelease=False)
+        except GitHubError as error:
+            print(f"umm skip: {error}", file=sys.stderr)
+            return EXIT_NETWORK
+        if not tag:
+            failed = True
+            rows.append({"kind": key, "repo": repo, "skipped": None, "detail": "no published release"})
+            if not args.json:
+                print(f"{key}: no published release to skip", file=sys.stderr)
+            continue
+        manager_config.skip_version(repo, tag)
+        rows.append({"kind": key, "repo": repo, "skipped": tag})
+        if not args.json:
+            print(f"{label}: {tag} will not be offered again (umm unskip --kind {key} to undo)")
+    if args.json:
+        print(json.dumps(rows, indent=2))
+    return EXIT_FAILED if failed else EXIT_OK
+
+
+def _repo_for(key: str) -> str:
+    from .kinds import get_kind
+    from .self_update import MANAGER_REPO
+
+    return MANAGER_REPO if key == "manager" else get_kind(key).repo
+
+
+# --------------------------------------------------------------------------- #
+# umm token (PLAN.md section 6.5-bis)
+# --------------------------------------------------------------------------- #
+
+
+def _read_token_from_stdin() -> str:
+    """Read one line from stdin without echoing it anywhere afterwards."""
+    if sys.stdin is None:  # pragma: no cover - only without a stdin at all
+        return ""
+    if getattr(sys.stdin, "isatty", lambda: False)():
+        print("paste the GitHub token and press Enter (it is never printed back):")
+    try:
+        return sys.stdin.readline()
+    except (OSError, ValueError):  # pragma: no cover - closed stdin
+        return ""
+
+
+def _cmd_token(args: argparse.Namespace) -> int:
+    from . import github, secrets
+
+    if args.action == "status":
+        present = secrets.has_token()
+        rate = github.rate_limit_state()
+        payload: JsonDict = {
+            "present": present,
+            "source": secrets.token_source(),
+            "target": secrets.DEFAULT_TARGET,
+            "rate_limit": None if rate is None else rate.to_dict(),
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print(f"token: {'present' if present else 'absent'} (source: {payload['source']})")
+            print(f"credential target: {secrets.DEFAULT_TARGET}")
+        return EXIT_OK
+
+    if args.action == "clear":
+        removed = secrets.delete_token()
+        payload = {"present": False, "removed": removed, "target": secrets.DEFAULT_TARGET}
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print("token removed from the Credential Manager" if removed else "no token was stored")
+        return EXIT_OK
+
+    raw = os.environ.get(args.from_env, "") if args.from_env else _read_token_from_stdin()
+    if args.from_env and not raw.strip():
+        print(f"umm token set: {args.from_env} is empty or not set", file=sys.stderr)
+        return EXIT_FAILED
+    try:
+        secrets.set_token(raw)
+    except ValueError:
+        print("umm token set: no token was given (stdin was empty)", file=sys.stderr)
+        return EXIT_FAILED
+    except secrets.CredentialError as error:
+        print(f"umm token set: {error}", file=sys.stderr)
+        return EXIT_FAILED
+    payload = {"present": True, "target": secrets.DEFAULT_TARGET, "source": "credential_manager"}
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"token stored in the Windows Credential Manager (target {secrets.DEFAULT_TARGET})")
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# umm self-update (PLAN.md section 6.5)
+# --------------------------------------------------------------------------- #
+
+
+def _cmd_self_update(args: argparse.Namespace) -> int:
+    from . import manager_config, self_update
+
+    config = manager_config.load()
+    prerelease = bool(args.prerelease) or config.include_prerelease_for(self_update.MANAGER_REPO)
+    state = self_update.check_self(
+        include_prerelease=prerelease,
+        skipped_tag=config.skipped_versions.get(self_update.MANAGER_REPO),
+    )
+
+    if args.check_only:
+        print(json.dumps(state.to_dict(), indent=2) if args.json else state.detail)
+        return EXIT_UPDATES_AVAILABLE if state.available else EXIT_OK
+
+    if args.dry_run:
+        steps = self_update.describe_self(state)
+        if args.json:
+            print(json.dumps({"action": "self-update", "dry_run": True, "steps": steps}, indent=2))
+        else:
+            for line in steps:
+                print(f"  {line}")
+        return EXIT_OK
+
+    if not state.available:
+        print(json.dumps(state.to_dict(), indent=2) if args.json else state.detail)
+        return EXIT_OK
+
+    if not self_update.is_frozen():
+        message = (
+            "self-update non disponibile da sorgente: aggiorna il checkout con git, oppure usa UsageMonitorManager.exe"
+        )
+        print(json.dumps({"ok": False, "detail": message}, indent=2) if args.json else message, file=sys.stderr)
+        return EXIT_FAILED
+
+    if not args.yes and not _confirm(f"update the manager to {state.target_version}?"):
+        print("skipped")
+        return EXIT_OK
+
+    printer = None if args.json else _ProgressPrinter(tty=bool(getattr(sys.stdout, "isatty", lambda: False)()))
+    result = self_update.apply_self(
+        printer,
+        check=state,
+        confirm_unverified=(lambda: False) if args.yes else (lambda: _confirm("no sha256 published; install anyway?")),
+    )
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(f"{'ok  ' if result.ok else 'FAIL'} self-update: {result.detail}")
+    return EXIT_OK if result.ok else EXIT_FAILED
+
+
+def _cmd_post_update(pid: int) -> int:
+    """``--post-update PID``: succeed the previous process, then be the tray."""
+    from . import self_update
+    from .ui import tray
+
+    outcome = self_update.finish_post_update(pid)
+    print(outcome.detail)
+    return tray.run_tray(wait_for_mutex=self_update.DEFAULT_WAIT_TIMEOUT, messages=[outcome.message])
+
+
+# --------------------------------------------------------------------------- #
+# umm status (PLAN.md section 9.11, minimal form)
+# --------------------------------------------------------------------------- #
+
+
+def _status_payload(*, check: bool) -> JsonDict:
+    """Instances, the stored update bookkeeping and one watchdog pass.
+
+    Offline by default: a statusline calls this every few seconds, and the
+    stored ``last_check`` of the scheduler already says what GitHub answered.
+    ``--check`` asks for real.
+    """
+    from datetime import UTC, datetime
+
+    from . import manager_config, watchdog
+    from .discovery import discover
+    from .github import GitHubError
+    from .self_update import MANAGER_REPO, check_self
+    from .updater import plan_status
+    from .versions import VersionStatus, display_version
+
+    config = manager_config.load()
+    instances = discover()
+    rows = [
+        {
+            "id": instance.instance_id,
+            "kind": instance.kind.key,
+            "label": instance.label or config.label_for(instance.kind.key, instance.config_dir),
+            "config_dir": str(instance.config_dir),
+            "exe_path": None if instance.exe_path is None else str(instance.exe_path),
+            "local_version": display_version(instance.exe_version),
+            "is_running": instance.is_running,
+            "pid": None if instance.processes is None else instance.processes.app_pid,
+        }
+        for instance in instances
+    ]
+
+    updates: JsonDict = {
+        "checked": bool(check),
+        "last_check": dict(config.last_check),
+        "skipped_versions": dict(config.skipped_versions),
+        "plans": [],
+        "available": 0,
+        "error": None,
+    }
+    self_state: JsonDict | None = None
+    if check:
+        try:
+            plans = _build_plans(None, prerelease=config.preferences.include_prerelease)
+        except GitHubError as error:
+            updates["error"] = str(error)
+            plans = []
+        ignored = {_normcase(plan.exe_path) for plan in _skipped_plans(plans)}
+        updates["plans"] = [
+            {
+                "kind": plan.kind.key,
+                "exe_path": str(plan.exe_path),
+                "current_version": display_version(plan.current_version),
+                "target_version": plan.target.version,
+                "tag": plan.target.tag,
+                "status": "skipped" if _normcase(plan.exe_path) in ignored else str(plan_status(plan)),
+            }
+            for plan in plans
+        ]
+        updates["available"] = sum(
+            1
+            for plan in plans
+            if plan_status(plan) is VersionStatus.UPDATE_AVAILABLE and _normcase(plan.exe_path) not in ignored
+        )
+        self_state = check_self(
+            include_prerelease=config.include_prerelease_for(MANAGER_REPO),
+            skipped_tag=config.skipped_versions.get(MANAGER_REPO),
+        ).to_dict()
+
+    dog = watchdog.Watchdog()
+    findings = dog.poll()
+
+    return {
+        "version": __version__,
+        "generated_at": datetime.now(tz=UTC).isoformat(),
+        "instances": rows,
+        "running": sum(1 for row in rows if row["is_running"]),
+        "updates": updates,
+        "self_update": self_state,
+        "watchdog": findings.to_dict(),
+    }
+
+
+def _cmd_status(args: argparse.Namespace) -> int:
+    payload = _status_payload(check=bool(args.check))
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return EXIT_OK
+    instances = payload["instances"]
+    print(f"Usage Monitor Manager {payload['version']} - {payload['running']}/{len(instances)} running")
+    for row in instances:
+        mark = "running" if row["is_running"] else "stopped"
+        print(f"  {row['id']:<24} {row['local_version'] or '?':<10} {mark}")
+    updates = payload["updates"]
+    if updates["checked"]:
+        suffix = f" (error: {updates['error']})" if updates["error"] else ""
+        print(f"updates available: {updates['available']}{suffix}")
+    else:
+        print("updates: not checked (use --check)")
+    findings = payload["watchdog"]
+    if findings["count"]:
+        for event in findings["events"]:
+            print(f"  ! {event['type']}: {event['detail']}")
+    else:
+        print("watchdog: nothing anomalous")
+    return EXIT_OK
 
 
 # --------------------------------------------------------------------------- #
@@ -1006,7 +1636,7 @@ def _attach_console_if_frozen(args: Sequence[str]) -> None:
     """
     if not getattr(sys, "frozen", False):
         return
-    if not args or args[0] in ("tray", "--tray"):
+    if not args or args[0] in ("tray", "--tray", "--post-update"):
         return
     from .platform import attach_parent_console
 
@@ -1022,6 +1652,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     raw = raw_args
     # PLAN.md section 6.5 writes the autostart command as `"<exe>" --tray`.
     args = parser.parse_args(["tray" if token == "--tray" else token for token in raw])
+    if args.post_update is not None:
+        return _cmd_post_update(int(args.post_update))
     if args.command is None:
         parser.print_help()
         return EXIT_NOT_IMPLEMENTED
@@ -1037,6 +1669,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_update(args, parser)
     if args.command == "rollback":
         return _cmd_rollback(args)
+    if args.command == "archive":
+        return _cmd_archive(args)
+    if args.command in ("skip", "unskip"):
+        return _cmd_skip(args, skip=args.command == "skip")
+    if args.command == "token":
+        return _cmd_token(args)
+    if args.command == "self-update":
+        return _cmd_self_update(args)
+    if args.command == "status":
+        return _cmd_status(args)
     if args.command == "config":
         return _cmd_config(args)
     if args.command == "import-legacy":

@@ -122,15 +122,26 @@ class JsApi:
         scheduler: Any | None = None,
         config_path: Path | None = None,
         registry_root: Any | None = None,
+        watchdog: Any | None = None,
     ) -> None:
         self._emit_sink = emit
         self._scheduler = scheduler
         self._config_path = config_path
         self._registry_root = registry_root
+        self._watchdog = watchdog
+        self._on_quit: Callable[[], None] | None = None
         self._cache = _Cache()
         self._lock = threading.Lock()
 
     # -- plumbing ------------------------------------------------------------
+
+    def set_watchdog(self, watchdog: Any | None) -> None:
+        """Let the page read the watchdog the tray owns (never a second one)."""
+        self._watchdog = watchdog
+
+    def set_quit_callback(self, on_quit: Callable[[], None] | None) -> None:
+        """How :meth:`apply_self_update` asks the tray to come down."""
+        self._on_quit = on_quit
 
     def set_event_sink(self, emit: EventSink | None) -> None:
         """Point progress events at a (new) window, or nowhere."""
@@ -693,25 +704,204 @@ class JsApi:
     # -- manager page --------------------------------------------------------
 
     def get_manager_info(self) -> JsonDict:
-        from .. import github
+        from .. import github, secrets, self_update
         from ..platform import get_manager_autostart
 
         rate = github.rate_limit_state()
-        token = github.resolve_token()
         try:
             autostart = get_manager_autostart(self._registry_root)
         except OSError:
             autostart = None
+        state = self._scheduler.state.self_update if self._scheduler is not None else None
         return {
             "version": __version__,
             "autostart": autostart is not None,
             "autostart_command": autostart,
-            "github_token_present": token is not None,
+            "github_token_present": github.resolve_token() is not None,
+            "github_token_stored": secrets.has_token(),
+            "github_token_source": secrets.token_source(),
+            "credential_target": secrets.DEFAULT_TARGET,
             "rate_limit": None if rate is None else rate.to_dict(),
             "config_path": str(self._config_path or manager_config.config_path()),
-            "frozen": bool(getattr(sys, "frozen", False)),
+            "frozen": self_update.is_frozen(),
             "executable": sys.executable,
+            "repo": self_update.MANAGER_REPO,
+            "self_update": None if state is None else state.to_dict(),
         }
+
+    # -- GitHub token (PLAN.md section 6.5-bis) -------------------------------
+
+    def set_github_token(self, token: str) -> JsonDict:
+        """Store the token; the value is never sent back to the page."""
+        from .. import secrets
+
+        try:
+            secrets.set_token(str(token))
+        except ValueError:
+            return {"ok": False, "detail": "il token e' vuoto", "present": secrets.has_token()}
+        except secrets.CredentialError as error:
+            return {"ok": False, "detail": str(error), "present": secrets.has_token()}
+        return {"ok": True, "detail": "token salvato nel Credential Manager", "present": True}
+
+    def clear_github_token(self) -> JsonDict:
+        from .. import secrets
+
+        removed = secrets.delete_token()
+        return {
+            "ok": True,
+            "removed": removed,
+            "present": False,
+            "detail": "token rimosso" if removed else "nessun token era memorizzato",
+        }
+
+    def get_rate_limit(self) -> JsonDict:
+        """The rate limit seen in the last API response (section 6.5-bis)."""
+        from .. import github, secrets
+
+        rate = github.rate_limit_state()
+        return {
+            "rate_limit": None if rate is None else rate.to_dict(),
+            "token_present": secrets.has_token(),
+            "token_source": secrets.token_source(),
+        }
+
+    # -- self-update (PLAN.md section 6.5) ------------------------------------
+
+    def check_self_update(self) -> JsonDict:
+        from .. import self_update
+
+        config = self._config()
+        state = self_update.check_self(
+            include_prerelease=config.include_prerelease_for(self_update.MANAGER_REPO),
+            skipped_tag=config.skipped_versions.get(self_update.MANAGER_REPO),
+        )
+        self._emit({"type": "self_update_state", "state": state.to_dict()})
+        return dict(state.to_dict())
+
+    def apply_self_update(self) -> JsonDict:
+        """Replace the manager and hand over to the new process.
+
+        The window cannot survive this: once the successor is spawned the tray
+        must quit, which is what ``on_exit`` does through the quit callback the
+        tray installed.
+        """
+        from .. import self_update
+
+        def report(event: Any) -> None:
+            self._emit({"type": "self_update_event", "event": event.to_dict()})
+
+        result = self_update.apply_self(report, on_exit=self._on_quit)
+        return dict(result.to_dict())
+
+    # -- skip / prerelease (PLAN.md section 9.5) ------------------------------
+
+    def skip_version(self, key: str) -> JsonDict:
+        """Skip the pending release of one kind, or of the manager itself."""
+        from .. import manager_config as config_module
+        from ..kinds import get_kind
+        from ..self_update import MANAGER_REPO
+
+        if key == "manager":
+            state = self._scheduler.state.self_update if self._scheduler is not None else None
+            tag = None if state is None else state.tag
+            repo = MANAGER_REPO
+        else:
+            try:
+                repo = get_kind(key).repo
+            except KeyError as error:
+                return {"ok": False, "detail": str(error)}
+            tag = next(
+                (
+                    plan.target.tag
+                    for plan in (self._scheduler.state.plans if self._scheduler is not None else ())
+                    if plan.kind.key == key
+                ),
+                None,
+            )
+        if not tag:
+            return {"ok": False, "detail": f"nessuna release nota per {key}: esegui prima un controllo"}
+        config_module.skip_version(repo, tag, self._config_path)
+        if self._scheduler is not None:
+            self._scheduler.check_now()
+        return {"ok": True, "repo": repo, "tag": tag, "detail": f"{tag} non verra' piu' proposta"}
+
+    def unskip_version(self, key: str) -> JsonDict:
+        from .. import manager_config as config_module
+        from ..kinds import get_kind
+        from ..self_update import MANAGER_REPO
+
+        try:
+            repo = MANAGER_REPO if key == "manager" else get_kind(key).repo
+        except KeyError as error:
+            return {"ok": False, "detail": str(error)}
+        config_module.unskip_version(repo, self._config_path)
+        if self._scheduler is not None:
+            self._scheduler.forget_notifications()
+            self._scheduler.check_now()
+        return {"ok": True, "repo": repo, "detail": "la versione saltata torna disponibile"}
+
+    def set_repo_prerelease(self, key: str, value: object) -> JsonDict:
+        """Per-repo prerelease override; ``None`` falls back to the global flag."""
+        from .. import manager_config as config_module
+        from ..kinds import get_kind
+        from ..self_update import MANAGER_REPO
+
+        try:
+            repo = MANAGER_REPO if key == "manager" else get_kind(key).repo
+        except KeyError as error:
+            return {"ok": False, "detail": str(error)}
+        flag = None if value is None else bool(value)
+        config_module.set_prerelease_repo(repo, flag, self._config_path)
+        return {"ok": True, "repo": repo, "include_prerelease": flag}
+
+    # -- archive and rollback (PLAN.md section 9.4) ---------------------------
+
+    def list_archived(self, exe_path: str) -> list[JsonDict]:
+        """The builds kept in ``.umm-archive`` for one executable, newest first."""
+        from .. import archive
+
+        return [item.to_dict() for item in archive.list_archived(Path(exe_path))]
+
+    def restore_archived(self, exe_path: str, version: str | None = None) -> JsonDict:
+        """Put an archived build back (the "Ripristina" button)."""
+        from .. import archive
+
+        def report(event: Any) -> None:
+            self._emit({"type": "update_event", "exe_path": str(exe_path), "event": event.to_dict()})
+
+        result = archive.restore(
+            Path(exe_path),
+            version,
+            instances=self._discover(),
+            on_event=report,
+        )
+        self._discover()
+        return dict(result.to_dict())
+
+    def prune_archive(self, exe_path: str, keep: int | None = None) -> JsonDict:
+        from .. import archive
+
+        limit = self._config().preferences.archive_keep if keep is None else int(keep)
+        removed = archive.prune(Path(exe_path), keep=max(0, limit))
+        return {"ok": True, "keep": limit, "removed": [item.to_dict() for item in removed]}
+
+    # -- watchdog (PLAN.md section 9.2) ---------------------------------------
+
+    def get_watchdog_state(self) -> JsonDict:
+        """The findings of the last watchdog pass; empty when it is not running."""
+        return {} if self._watchdog is None else dict(self._watchdog.state.to_dict())
+
+    def repair_instance(self, instance_id: str) -> JsonDict:
+        """Act on the worst anomaly of one instance ("Ripara")."""
+        if self._watchdog is None:
+            return {"ok": False, "detail": "watchdog non attivo"}
+        events = self._watchdog.state.for_instance(instance_id)
+        if not events:
+            return {"ok": False, "detail": f"nessuna anomalia per {instance_id}"}
+        worst = max(events, key=lambda event: event.severity)
+        outcome = self._watchdog.repair(worst)
+        self._discover()
+        return dict(outcome)
 
     def import_legacy(self, dry_run: bool = True) -> JsonDict:
         from ..legacy import import_legacy as run

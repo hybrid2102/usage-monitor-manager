@@ -235,7 +235,9 @@ def test_update_applies_the_plan(monkeypatch: pytest.MonkeyPatch, capsys: pytest
     assert "ok   copilot" in out
     assert captured[0]["restart"] is True
     confirm = captured[0]["confirm_unverified"]
-    assert callable(confirm) and confirm() is True  # --yes also accepts an unverifiable asset
+    # Phase 6: --yes is the unattended path, so an unverifiable asset is refused
+    # (the caller sees EXIT_UNVERIFIED); --allow-unverified is the explicit opt-in.
+    assert callable(confirm) and confirm() is False
 
 
 def test_update_json_reports_the_result(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

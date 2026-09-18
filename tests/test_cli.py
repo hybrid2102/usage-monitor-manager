@@ -96,16 +96,28 @@ def test_version_exits_zero_and_prints_version(capsys: pytest.CaptureFixture[str
     assert capsys.readouterr().out.strip() == __version__
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["self-update", "--check-only"],
-        ["status", "--json"],
-    ],
-)
-def test_subcommands_report_not_implemented(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(argv) == EXIT_NOT_IMPLEMENTED
-    assert "not implemented" in capsys.readouterr().out
+def test_every_documented_subcommand_is_implemented() -> None:
+    """Phase 6 closes the surface: nothing answers EXIT_NOT_IMPLEMENTED any more."""
+    parser = build_parser()
+    actions = [action for action in parser._actions if getattr(action, "choices", None) and action.dest == "command"]
+    assert actions, "the parser must expose subcommands"
+    commands = set(actions[0].choices or {})
+    assert {
+        "archive",
+        "autostart",
+        "check",
+        "config",
+        "import-legacy",
+        "list",
+        "rollback",
+        "self-update",
+        "skip",
+        "status",
+        "token",
+        "tray",
+        "unskip",
+        "update",
+    } <= commands
 
 
 def test_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
@@ -145,8 +157,11 @@ def test_tray_subcommand_and_the_legacy_flag_are_the_same_thing(monkeypatch: pyt
     assert calls == ["tray", "tray"]
 
 
-def test_module_entry_with_args_dispatches_to_cli() -> None:
-    assert __main__.main(["self-update", "--check-only"]) == EXIT_NOT_IMPLEMENTED
+def test_module_entry_with_args_dispatches_to_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(cli, "_cmd_status", lambda args: calls.append("status") or 0)
+    assert __main__.main(["status", "--json"]) == 0
+    assert calls == ["status"]
 
 
 # --------------------------------------------------------------------------- #

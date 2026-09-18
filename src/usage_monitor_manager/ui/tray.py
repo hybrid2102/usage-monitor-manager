@@ -20,15 +20,17 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .. import __version__, legacy, manager_config, platform
 from ..model import JsonDict
 from ..scheduler import UpdateScheduler
+from ..watchdog import Watchdog
 from .window import JsApi
 
 __all__ = [
@@ -41,6 +43,7 @@ __all__ = [
     "draw_glyph",
     "make_image",
     "menu_labels",
+    "acquire_mutex",
     "run_tray",
     "short_path",
 ]
@@ -211,9 +214,40 @@ def _instance_submenu(row: JsonDict) -> tuple[MenuEntry, ...]:
                     (str(row.get("exe_path") or ""),),
                     enabled=has_exe,
                 ),
+                MenuEntry("Salta questa versione", "skip_version", (str(row.get("kind") or ""),)),
+            ]
+        )
+    if row.get("watchdog"):
+        entries.extend(
+            [
+                SEPARATOR,
+                MenuEntry(f"Ripara: {row.get('watchdog')}", "repair", (instance_id,)),
             ]
         )
     return tuple(entries)
+
+
+def _self_update_state(state: JsonDict) -> JsonDict:
+    """The ``self_update`` sub-document of an update state, or an empty one."""
+    own = state.get("self_update")
+    if not isinstance(own, dict):
+        return {}
+    return {str(key): value for key, value in cast("dict[object, object]", own).items()}
+
+
+def _manager_text(state: JsonDict, version: str) -> str:
+    """``Manager 0.7.0 (aggiornato)`` / ``(0.8.0 disponibile)`` / ``(nessuna release)``."""
+    own = _self_update_state(state)
+    if not own:
+        return f"Manager {version}"
+    if own.get("available"):
+        return f"Manager {version} \u2014 {own.get('target_version') or '?'} disponibile"
+    status = str(own.get("status") or "")
+    if status == "unknown":
+        return f"Manager {version} \u2014 nessuna release"
+    if own.get("skipped"):
+        return f"Manager {version} \u2014 {own.get('target_version') or '?'} saltata"
+    return f"Manager {version} (aggiornato)"
 
 
 def _last_check_text(last_check: str | None) -> str:
@@ -260,7 +294,19 @@ def build_menu_spec(
             ),
             MenuEntry("Apri Manager\u2026", "open_window", default=True),
             SEPARATOR,
-            MenuEntry(f"Manager {version}", None, enabled=False),
+            MenuEntry(_manager_text(state, version), None, enabled=False),
+        ]
+    )
+    own = _self_update_state(state)
+    if own.get("available"):
+        entries.extend(
+            [
+                MenuEntry(f"Aggiorna il manager a {own.get('target_version') or '?'}\u2026", "self_update"),
+                MenuEntry("Salta questa versione", "skip_version", ("manager",)),
+            ]
+        )
+    entries.extend(
+        [
             MenuEntry("Esci", "quit"),
         ]
     )
@@ -294,6 +340,7 @@ class TrayApp:
         *,
         config_path: Path | None = None,
         owns_scheduler: bool | None = None,
+        watchdog: Watchdog | None = None,
     ) -> None:
         """``owns_scheduler`` decides whether :meth:`quit` stops the scheduler.
 
@@ -309,6 +356,11 @@ class TrayApp:
         self._icon: Any | None = None
         self._rows: list[JsonDict] = []
         self._quitting = threading.Event()
+        self._watchdog = watchdog if watchdog is not None else Watchdog(config_path=config_path)
+        self._watchdog_owned = watchdog is None
+        self._wire_watchdog()
+        self._api.set_watchdog(self._watchdog)
+        self._api.set_quit_callback(self.quit)
 
     # -- data ----------------------------------------------------------------
 
@@ -320,12 +372,36 @@ class TrayApp:
     def scheduler(self) -> UpdateScheduler:
         return self._scheduler
 
+    @property
+    def watchdog(self) -> Watchdog:
+        return self._watchdog
+
+    def _wire_watchdog(self) -> None:
+        """Route the watchdog findings to a notification and the badge."""
+        self._watchdog.set_event_callback(self.on_watchdog_events)
+
+    def on_watchdog_events(self, events: Sequence[Any]) -> None:
+        """One toast per anomaly (PLAN.md section 9.2), then redraw the icon."""
+        for event in events:
+            if event.type == "crashed":
+                text = f"{event.instance_id} si e' chiuso da solo"
+                text += " ed e' stato riavviato" if event.repaired else "; apri il manager per riavviarlo"
+            elif event.type == "duplicate":
+                text = f"{event.instance_id}: due processi per la stessa istanza"
+            else:
+                text = f"{event.instance_id}: coppia di processi incompleta"
+            self.notify(text, "Watchdog")
+        self.refresh_icon()
+
     def rows(self, *, refresh: bool = True) -> list[JsonDict]:
-        """The instance rows the menu is built from."""
+        """The instance rows the menu is built from, watchdog status included."""
         try:
             self._rows = self._api.list_instances(refresh=refresh)
         except Exception:  # noqa: BLE001 - a failed scan must not kill the menu
             pass
+        findings = self._watchdog.state
+        for row in self._rows:
+            row["watchdog"] = findings.status_of(str(row.get("id", "")))
         return self._rows
 
     def spec(self) -> tuple[MenuEntry, ...]:
@@ -410,6 +486,17 @@ class TrayApp:
         if action == "check":
             self._in_worker("controllo aggiornamenti", api.check_updates)
             return
+        if action == "self_update":
+            self.open_window("manager")
+            return
+        if action == "skip_version":
+            key = str(args[0]) if args else ""
+            self._in_worker("salta versione", lambda: api.skip_version(key))
+            return
+        if action == "repair":
+            instance_id = str(args[0]) if args else ""
+            self._in_worker("ripara", lambda: api.repair_instance(instance_id))
+            return
 
     def open_window(self, page: str = "dashboard", **params: object) -> None:
         """Show the manager window; the window itself lives on the main thread."""
@@ -441,8 +528,9 @@ class TrayApp:
         if icon is None:
             return
         state = self._scheduler.state
+        anomalies = self._watchdog.state.count
         try:
-            icon.icon = make_image(state.update_count, state.error is not None)
+            icon.icon = make_image(state.update_count, state.error is not None or anomalies > 0)
             icon.title = self.tooltip()
             icon.update_menu()
         except Exception:  # noqa: BLE001 - a shell hiccup is not fatal
@@ -456,6 +544,10 @@ class TrayApp:
             parts.append("ultimo controllo non riuscito")
         elif state.update_count:
             parts.append(f"{state.update_count} aggiornamenti disponibili")
+        anomalies = self._watchdog.state.events
+        if anomalies:
+            kinds = ", ".join(sorted({event.type for event in anomalies}))
+            parts.append(f"{len(anomalies)} anomalie ({kinds})")
         return " \u2014 ".join(parts)
 
     def on_updates_available(self, plans: Sequence[Any]) -> None:
@@ -465,6 +557,14 @@ class TrayApp:
                 f"{plan.kind.display_name} {plan.target.version} disponibile (hai la {plan.current_version or '?'})",
                 "Aggiornamento disponibile",
             )
+        self.refresh_icon()
+
+    def on_self_update_available(self, check: Any) -> None:
+        """Scheduler callback: the manager itself has a newer release."""
+        self.notify(
+            f"Manager {check.target_version} disponibile (hai la {check.current_version})",
+            "Aggiornamento del manager",
+        )
         self.refresh_icon()
 
     # -- lifecycle -----------------------------------------------------------
@@ -488,6 +588,8 @@ class TrayApp:
         self._quitting.set()
         if self._scheduler_owned:
             self._scheduler.stop(timeout=2.0)
+        if self._watchdog_owned:
+            self._watchdog.stop(timeout=2.0)
         icon = self._icon
         if icon is not None:
             try:
@@ -520,23 +622,47 @@ def _startup_housekeeping(config_path: Path | None) -> list[str]:
     return messages
 
 
-def run_tray(config_path: Path | None = None) -> int:
+def acquire_mutex(timeout: float = 0.0, *, poll: float = 0.5) -> platform.MutexHolder | None:
+    """Take the single-instance mutex, waiting up to ``timeout`` seconds.
+
+    The wait exists for exactly one caller: the process started with
+    ``--post-update``, which is racing the manager it just replaced. Everybody
+    else passes ``timeout=0`` and fails immediately, which is the singleton
+    behaviour of PLAN.md section 6.5.
+    """
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        holder = platform.hold_mutex(MUTEX_NAME)
+        if holder is not None or time.monotonic() >= deadline:
+            return holder
+        time.sleep(poll)
+
+
+def run_tray(
+    config_path: Path | None = None,
+    *,
+    wait_for_mutex: float = 0.0,
+    messages: Sequence[str] = (),
+) -> int:
     """Run the tray icon (and the window loop) until the user quits.
 
     Returns 0 on a clean exit, 1 when another manager already holds the
-    single-instance mutex.
+    single-instance mutex. ``messages`` are shown as notifications once the
+    icon exists, which is how ``--post-update`` says "Manager aggiornato alla
+    vX.Y.Z".
     """
-    holder = platform.hold_mutex(MUTEX_NAME)
+    holder = acquire_mutex(wait_for_mutex)
     if holder is None:
         print("Usage Monitor Manager e' gia' in esecuzione (icona nella tray).")
         return 1
 
-    messages = _startup_housekeeping(config_path)
+    notes = [*messages, *_startup_housekeeping(config_path)]
 
     app: TrayApp | None = None
     scheduler = UpdateScheduler(
         config_path=config_path,
         on_updates_available=lambda plans: app.on_updates_available(plans) if app is not None else None,
+        on_self_update_available=lambda check: app.on_self_update_available(check) if app is not None else None,
         on_state_change=lambda _state: app.refresh_icon() if app is not None else None,
     )
     app = TrayApp(scheduler=scheduler, config_path=config_path, owns_scheduler=True)
@@ -544,7 +670,9 @@ def run_tray(config_path: Path | None = None) -> int:
 
     threading.Thread(target=icon.run, name="umm-tray-icon", daemon=True).start()
     scheduler.start()
-    for message in messages:
+    if manager_config.load(config_path).preferences.watchdog_enabled:
+        app.watchdog.start()
+    for message in notes:
         app.notify(message)
 
     from .window import run_main_loop
@@ -553,6 +681,7 @@ def run_tray(config_path: Path | None = None) -> int:
         run_main_loop(app.api)
     finally:
         scheduler.stop(timeout=2.0)
+        app.watchdog.stop(timeout=2.0)
         try:
             icon.stop()
         except Exception:  # noqa: BLE001
