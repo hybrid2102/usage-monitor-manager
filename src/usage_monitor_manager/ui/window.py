@@ -56,7 +56,7 @@ __all__ = [
 
 WINDOW_WIDTH = 1180
 WINDOW_HEIGHT = 780
-PAGES = ("dashboard", "updates", "manager")
+PAGES = ("dashboard", "updates", "settings", "manager")
 
 BACKGROUND = "#1e1e1e"
 """Same background as the monitors' popup, so the family looks like a family."""
@@ -376,34 +376,318 @@ class JsApi:
         self._discover()
         return {"ok": True, "enabled": command is not None, "command": command}
 
-    def get_settings_raw(self, instance_id: str) -> JsonDict:
-        """The instance's ``usage-monitor-settings.json`` as text, read-only.
+    # -- settings editor (phase 5) ------------------------------------------
 
-        The editing form is Phase 5; until then the window shows the active
-        file verbatim, plus the shadowed candidates that explain why an edit
-        somewhere else had no effect.
-        """
-        targets = self._by_id([instance_id])
-        if not targets:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
-        instance = targets[0]
-        text: str | None = None
-        error: str | None = None
-        if instance.settings_path is not None:
-            try:
-                text = instance.settings_path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError) as read_error:
-                error = str(read_error)
+    def _instance(self, instance_id: str) -> Instance | None:
+        found = self._by_id([instance_id])
+        return found[0] if found else None
+
+    def _settings_payload(self, instance: Instance) -> JsonDict:
+        """Everything the Impostazioni page needs for one instance."""
+        from ..history import versions_payload
+        from ..settings import store
+        from ..settings.schema import schema_for
+
+        suggested = store.suggested_path(instance)
+        path = instance.settings_path or suggested
+        loaded = store.load(path)
+        report = store.validate(instance.kind.key, loaded.data)
         return {
             "ok": True,
             "instance_id": instance.instance_id,
-            "label": instance.label,
-            "path": None if instance.settings_path is None else str(instance.settings_path),
-            "exists": instance.settings_exists,
-            "shadowed": [str(path) for path in instance.shadow_settings_paths],
-            "text": text,
-            "error": error,
-            "read_only": True,
+            "kind": instance.kind.key,
+            "kind_display": instance.kind.display_name,
+            "label": instance.label or self._config().label_for(instance.kind.key, instance.config_dir),
+            "config_dir": str(instance.config_dir),
+            "path": str(path),
+            "suggested_path": str(suggested),
+            "exists": loaded.exists,
+            "shadowed": [str(shadow) for shadow in instance.shadow_settings_paths],
+            "data": loaded.data,
+            "text": loaded.text,
+            "error": loaded.error,
+            "validation": report.to_dict(),
+            "schema": schema_for(instance.kind.key).to_dict(),
+            "history": versions_payload(instance),
+            "is_running": instance.is_running,
+        }
+
+    def get_settings(self, instance_id: str) -> JsonDict:
+        """The instance's settings, its schema, its history and its validation."""
+        instance = self._instance(instance_id)
+        if instance is None:
+            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+        return self._settings_payload(instance)
+
+    def get_schema(self, kind: str) -> JsonDict:
+        """The declarative schema of one kind, for the form builder."""
+        from ..settings.schema import schema_for
+
+        try:
+            return schema_for(str(kind)).to_dict()
+        except KeyError as error:
+            return {"ok": False, "detail": str(error)}
+
+    def validate_draft(self, kind: str, data: JsonDict) -> JsonDict:
+        """Validate a draft with the monitor's own rules (live, before saving)."""
+        from ..settings import store
+
+        try:
+            return store.validate(str(kind), dict(data)).to_dict()
+        except KeyError as error:
+            return {"ok": False, "detail": str(error)}
+
+    def save_settings(self, instance_id: str, data: JsonDict, restart: bool = False) -> JsonDict:
+        """Validate, write (``.bak`` + history) and optionally restart.
+
+        Invalid values stop the save: the point of the editor is that the user
+        never discovers a mistake from the monitor's MessageBox.
+        """
+        from ..settings import store
+
+        instance = self._instance(instance_id)
+        if instance is None:
+            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+        report = store.validate(instance.kind.key, dict(data))
+        if report.errors:
+            return {
+                "ok": False,
+                "detail": "impostazioni non valide: non è stato scritto nulla",
+                "validation": report.to_dict(),
+            }
+        target = instance.settings_path or store.suggested_path(instance)
+        try:
+            store.save(target, report.normalized, instance=instance)
+        except OSError as error:
+            return {"ok": False, "detail": str(error)}
+        payload = self._settings_payload(instance)
+        payload["saved_to"] = str(target)
+        payload["detail"] = f"salvato in {target}"
+        if restart:
+            payload["restart"] = self.restart([instance.instance_id])
+        return payload
+
+    def create_settings(self, instance_id: str) -> JsonDict:
+        """Create an empty settings file at the monitor's preferred location."""
+        from ..settings import store
+
+        instance = self._instance(instance_id)
+        if instance is None:
+            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+        target = store.suggested_path(instance)
+        if target.is_file():
+            return {"ok": False, "detail": f"{target} esiste già"}
+        try:
+            store.create_default(target)
+        except OSError as error:
+            return {"ok": False, "detail": str(error)}
+        self._discover()
+        instance = self._instance(instance_id) or instance
+        payload = self._settings_payload(instance)
+        payload["detail"] = f"creato {target}"
+        return payload
+
+    # -- history -------------------------------------------------------------
+
+    def list_history(self, instance_id: str) -> JsonDict:
+        """The archived versions of one instance, newest first."""
+        from ..history import versions_payload
+
+        instance = self._instance(instance_id)
+        if instance is None:
+            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+        return {"ok": True, "versions": versions_payload(instance)}
+
+    def get_history_version(self, instance_id: str, stamp: str) -> JsonDict:
+        """One archived version plus its diff against the file on disk."""
+        from ..history import diff_payload, read_version
+        from ..settings import store
+
+        instance = self._instance(instance_id)
+        if instance is None:
+            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+        data = read_version(instance, str(stamp))
+        if data is None:
+            return {"ok": False, "detail": f"versione {stamp!r} non trovata"}
+        current = store.load(instance.settings_path or store.suggested_path(instance)).data
+        return {"ok": True, "stamp": stamp, "data": data, "diff": diff_payload(data, current)}
+
+    def restore_history(self, instance_id: str, stamp: str) -> JsonDict:
+        """Put an archived version back in place (itself archived first)."""
+        from ..history import restore
+
+        instance = self._instance(instance_id)
+        if instance is None:
+            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+        try:
+            data = restore(instance, str(stamp))
+        except OSError as error:
+            return {"ok": False, "detail": str(error)}
+        if data is None:
+            return {"ok": False, "detail": f"versione {stamp!r} non trovata"}
+        payload = self._settings_payload(instance)
+        payload["detail"] = f"ripristinata la versione {stamp}"
+        return payload
+
+    def _file_dialog(self, *, save: bool, filename: str = "") -> str | None:
+        """Ask pywebview for a path; ``None`` when there is no window."""
+        try:
+            import webview
+        except ImportError:  # pragma: no cover - the tests pass explicit paths
+            return None
+        windows = list(getattr(webview, "windows", []) or [])
+        if not windows:
+            return None
+        dialog_type = webview.SAVE_DIALOG if save else webview.OPEN_DIALOG
+        result = windows[0].create_file_dialog(
+            dialog_type,
+            save_filename=filename,
+            file_types=("JSON (*.json)", "Tutti i file (*.*)"),
+        )
+        if not result:
+            return None
+        if isinstance(result, str):
+            return result
+        return str(result[0])
+
+    def export_settings(self, instance_id: str, dest: str | None = None) -> JsonDict:
+        """Write the instance's settings to a portable profile file."""
+        from ..history import export
+
+        instance = self._instance(instance_id)
+        if instance is None:
+            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+        target = dest or self._file_dialog(save=True, filename=f"{instance.instance_id}-settings.json")
+        if not target:
+            return {"ok": False, "detail": "esportazione annullata"}
+        try:
+            written = export(instance, Path(target))
+        except OSError as error:
+            return {"ok": False, "detail": str(error)}
+        return {"ok": True, "path": str(written), "detail": f"esportato in {written}"}
+
+    def import_settings(self, instance_id: str, src: str | None = None) -> JsonDict:
+        """Validate a profile file and, when valid, install it."""
+        from ..history import import_
+
+        instance = self._instance(instance_id)
+        if instance is None:
+            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+        source = src or self._file_dialog(save=False)
+        if not source:
+            return {"ok": False, "detail": "importazione annullata"}
+        result = import_(instance, Path(source))
+        payload = result.to_dict()
+        if result.ok:
+            payload.update(self._settings_payload(instance))
+            payload["detail"] = result.detail
+        return payload
+
+    # -- copy, presets, quick action -----------------------------------------
+
+    def copy_settings_from(
+        self,
+        instance_id: str,
+        source_id: str,
+        sections: Sequence[str],
+        data: JsonDict | None = None,
+    ) -> JsonDict:
+        """Merge whole sections of another instance into the current draft.
+
+        Nothing is written: the merged draft goes back to the form, so the
+        user still sees the diff and presses Salva.
+        """
+        from ..settings import store
+
+        instance = self._instance(instance_id)
+        source = self._instance(source_id)
+        if instance is None or source is None:
+            return {"ok": False, "detail": "istanza sconosciuta"}
+        if source.kind.key != instance.kind.key:
+            return {"ok": False, "detail": "la copia è possibile solo fra istanze dello stesso tipo"}
+        source_data = store.load(source.settings_path or store.suggested_path(source)).data
+        fallback = store.load(instance.settings_path or store.suggested_path(instance)).data
+        current = dict(data) if data is not None else fallback
+        merged = store.copy_sections(source_data, current, list(sections), instance.kind.key)
+        return {
+            "ok": True,
+            "data": merged,
+            "validation": store.validate(instance.kind.key, merged).to_dict(),
+            "detail": f"copiate {len(list(sections))} sezioni da {source.instance_id}",
+        }
+
+    def apply_preset(self, instance_id: str, primary: str, data: JsonDict | None = None) -> JsonDict:
+        """Derive ``bar_fg`` and the icon colours from one brand colour."""
+        from ..settings import store
+        from ..settings.presets import BRAND_PRESETS, apply_palette, palette_from_primary
+
+        instance = self._instance(instance_id)
+        if instance is None:
+            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+        fallback = store.load(instance.settings_path or store.suggested_path(instance)).data
+        current = dict(data) if data is not None else fallback
+        try:
+            merged = apply_palette(current, str(primary), instance.kind.key)
+            palette = palette_from_primary(str(primary))
+        except ValueError as error:
+            return {"ok": False, "detail": str(error)}
+        return {
+            "ok": True,
+            "data": merged,
+            "palette": palette,
+            "presets": [{"name": name, "color": color} for name, color in BRAND_PRESETS],
+            "validation": store.validate(instance.kind.key, merged).to_dict(),
+        }
+
+    def get_presets(self) -> list[JsonDict]:
+        """The brand preset list, for the colour swatches."""
+        from ..settings.presets import BRAND_PRESETS
+
+        return [{"name": name, "color": color} for name, color in BRAND_PRESETS]
+
+    def test_quick_action(self, instance_id: str, command: Sequence[str] | str | None = None) -> JsonDict:
+        """Run the quick action once and capture its output.
+
+        Only ever reached from the page's confirmation dialog: it launches
+        whatever the user configured, which is why the UI asks first and the
+        command actually run is echoed back in the result.
+        """
+        from ..platform import no_window_popen_kwargs
+        from ..settings import store
+
+        instance = self._instance(instance_id)
+        if instance is None:
+            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+        if command is None:
+            data = store.load(instance.settings_path or store.suggested_path(instance)).data
+            raw: Any = data.get("quick_action_command") or data.get("on_double_click_command") or []
+        else:
+            raw = command
+        argv = [raw] if isinstance(raw, str) else [str(item) for item in raw]
+        argv = [item for item in argv if str(item).strip()]
+        if not argv:
+            return {"ok": False, "detail": "nessuna quick action configurata"}
+        single = len(argv) == 1
+        try:
+            completed = subprocess.run(  # noqa: S602 - the command the user configured, run on request
+                argv[0] if single else argv,
+                shell=single,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+                cwd=str(instance.config_dir) if instance.config_dir.is_dir() else None,
+                **no_window_popen_kwargs(),
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            return {"ok": False, "detail": str(error), "command": argv}
+        return {
+            "ok": completed.returncode == 0,
+            "command": argv,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+            "detail": f"uscita {completed.returncode}",
         }
 
     # -- manager page --------------------------------------------------------
@@ -524,13 +808,17 @@ class ManagerWindow:
             window.events.closing += on_closing
             return window
 
-    def show(self, page: str = "dashboard") -> None:
-        """Create (if needed), navigate to ``page``, and bring the window up."""
+    def show(self, page: str = "dashboard", focus: str | None = None) -> None:
+        """Create (if needed), navigate to ``page``, and bring the window up.
+
+        ``focus`` is the instance id the page should select - the tray's
+        "Impostazioni…" entry opens the editor already on the right instance.
+        """
         window = self.create(page)
         try:
             window.show()
             if page in PAGES:
-                window.evaluate_js(f"window.umm && window.umm.goto({json.dumps(page)})")
+                window.evaluate_js(f"window.umm && window.umm.goto({json.dumps(page)}, {json.dumps(focus)})")
         except Exception:  # noqa: BLE001 - a window that will not show is not fatal
             return
 
@@ -558,7 +846,7 @@ class ManagerWindow:
 _window_singleton: ManagerWindow | None = None
 
 
-def open_window(page: str = "dashboard", api: JsApi | None = None) -> ManagerWindow:
+def open_window(page: str = "dashboard", api: JsApi | None = None, focus: str | None = None) -> ManagerWindow:
     """Open (or focus) the manager window on the given page.
 
     The first call needs an ``api``; later calls reuse the process-wide window.
@@ -566,7 +854,7 @@ def open_window(page: str = "dashboard", api: JsApi | None = None) -> ManagerWin
     global _window_singleton  # noqa: PLW0603 - one window per process, by design
     if _window_singleton is None:
         _window_singleton = ManagerWindow(api if api is not None else JsApi())
-    _window_singleton.show(page)
+    _window_singleton.show(page, focus)
     return _window_singleton
 
 

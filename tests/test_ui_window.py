@@ -94,6 +94,7 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     for directory in (home, tools):
         directory.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
 
     claude_exe = tools / "UsageMonitorForClaude.exe"
     copilot_exe = tools / "UsageMonitorForCopilot.exe"
@@ -169,27 +170,27 @@ def test_row_label_falls_back_to_nothing_when_undeclared(world: dict[str, Any]) 
     assert world["api"].list_instances()[0]["label"] is None
 
 
-def test_get_settings_raw_is_read_only(world: dict[str, Any]) -> None:
+def test_get_settings_returns_data_schema_and_history(world: dict[str, Any]) -> None:
     api: JsApi = world["api"]
     api.list_instances()
-    payload = api.get_settings_raw("claude")
+    payload = api.get_settings("claude")
     assert payload["ok"] is True
-    assert payload["read_only"] is True
     assert payload["exists"] is True
-    assert payload["text"] == '{"bar_fg": "#4a9eff"}'
+    assert payload["data"] == {"bar_fg": "#4a9eff"}
+    assert payload["schema"]["kind"] == "claude"
+    assert payload["validation"]["ok"] is True
     assert payload["shadowed"] == [str(Path(payload["path"]).parent / "shadow.json")]
 
 
-def test_get_settings_raw_for_an_unknown_instance(world: dict[str, Any]) -> None:
-    payload = world["api"].get_settings_raw("nope")
-    assert payload["ok"] is False
+def test_get_settings_for_an_unknown_instance(world: dict[str, Any]) -> None:
+    assert world["api"].get_settings("nope")["ok"] is False
 
 
-def test_get_settings_raw_without_a_file(world: dict[str, Any]) -> None:
-    payload = world["api"].get_settings_raw("copilot")
+def test_get_settings_without_a_file_points_at_the_suggested_path(world: dict[str, Any]) -> None:
+    payload = world["api"].get_settings("copilot")
     assert payload["ok"] is True
-    assert payload["path"] is None
-    assert payload["text"] is None
+    assert payload["exists"] is False
+    assert payload["path"] == payload["suggested_path"]
 
 
 # --------------------------------------------------------------------------- #

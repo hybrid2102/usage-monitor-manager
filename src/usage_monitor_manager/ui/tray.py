@@ -390,7 +390,7 @@ class TrayApp:
             self.open_window("dashboard")
             return
         if action == "settings":
-            self.open_window("dashboard", instance_id=str(args[0]) if args else None)
+            self.open_window("settings", instance_id=str(args[0]) if args else None)
             return
         if action == "update":
             self.open_window("updates", exe_path=str(args[0]) if args else None)
@@ -416,10 +416,10 @@ class TrayApp:
         from .window import open_window
 
         def work() -> None:
-            window = open_window(page, self._api)
             focus = params.get("instance_id") or params.get("exe_path")
+            window = open_window(page, self._api, str(focus) if focus else None)
             if focus:
-                window.show(page)
+                window.show(page, str(focus))
 
         self._in_worker("apri manager", work)
 

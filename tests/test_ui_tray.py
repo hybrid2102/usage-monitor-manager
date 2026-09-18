@@ -329,7 +329,7 @@ def test_dispatch_opens_the_window_for_settings_and_updates(
     app.dispatch("update", (r"C:\Tools\UsageMonitorForCopilot.exe",))
     assert opened == [
         ("dashboard", {}),
-        ("dashboard", {"instance_id": "claude"}),
+        ("settings", {"instance_id": "claude"}),
         ("updates", {"exe_path": r"C:\Tools\UsageMonitorForCopilot.exe"}),
     ]
 

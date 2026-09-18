@@ -16,6 +16,7 @@
       <nav class="tabs" role="tablist">
         <button class="tab" data-page="dashboard" role="tab">Dashboard</button>
         <button class="tab" data-page="updates" role="tab">Aggiornamenti</button>
+        <button class="tab" data-page="settings" role="tab">Impostazioni</button>
         <button class="tab" data-page="manager" role="tab">Manager</button>
       </nav>
       <div class="topbar-actions">
@@ -59,19 +60,6 @@
         </div>
         <p class="hint" id="dashboard-hint"></p>
 
-        <div class="panel" id="settings-panel" hidden>
-          <div class="bar">
-            <h2 id="settings-title">Impostazioni</h2>
-            <button class="btn" id="settings-close">Chiudi</button>
-          </div>
-          <p class="hint">
-            Sola lettura: l&rsquo;editor con i campi validati arriva nella fase 5.
-            Il file mostrato &egrave; quello che il monitor sta effettivamente usando.
-          </p>
-          <p class="mono" id="settings-path"></p>
-          <p class="hint" id="settings-shadow"></p>
-          <pre class="code-block" id="settings-raw"></pre>
-        </div>
       </section>
 
       <!-- --------------------------------------------- Aggiornamenti -->
@@ -100,6 +88,94 @@
             <pre class="code-block log" id="update-log"></pre>
           </div>
         </div>
+      </section>
+
+      <!-- ----------------------------------------------- Impostazioni -->
+      <section class="page" id="page-settings">
+        <div class="bar">
+          <h1>Impostazioni</h1>
+          <select id="settings-instance" aria-label="Istanza"></select>
+          <span class="hint" id="settings-state"></span>
+        </div>
+
+        <div class="bar toolbar">
+          <div class="group">
+            <button class="btn primary" id="btn-settings-save">Salva</button>
+            <button class="btn" id="btn-settings-save-restart">Salva e riavvia istanza</button>
+            <button class="btn" id="btn-settings-reload">Ricarica</button>
+            <button class="btn" id="btn-settings-create">Crea file</button>
+            <button class="btn" id="btn-settings-folder">Apri cartella</button>
+          </div>
+          <div class="group">
+            <button class="btn" id="btn-settings-copy">Copia da&hellip;</button>
+            <button class="btn" id="btn-settings-export">Esporta</button>
+            <button class="btn" id="btn-settings-import">Importa</button>
+            <button class="btn danger" id="btn-settings-quick">Testa quick action</button>
+          </div>
+        </div>
+
+        <div class="bar toolbar">
+          <label class="row">
+            <span>Preset brand</span>
+            <select id="settings-preset"></select>
+          </label>
+          <span class="swatches" id="settings-swatches"></span>
+          <button class="btn" id="btn-settings-preset">Applica preset</button>
+          <span class="preview" id="settings-preview">
+            <span class="preview-bar"><i id="preview-bar-fill"></i></span>
+            <span class="preview-icon" id="preview-icon-light">A</span>
+            <span class="preview-icon" id="preview-icon-dark">A</span>
+          </span>
+        </div>
+
+        <p class="mono" id="settings-file"></p>
+        <p class="hint" id="settings-shadow"></p>
+
+        <nav class="tabs subtabs" id="settings-tabs">
+          <button class="tab active" data-subtab="form">Modulo</button>
+          <button class="tab" data-subtab="json">JSON</button>
+          <button class="tab" data-subtab="unknown">Altre chiavi</button>
+          <button class="tab" data-subtab="history">Storico</button>
+        </nav>
+
+        <div class="subpage" id="settings-sub-form">
+          <input type="search" id="settings-search" placeholder="Cerca una chiave&hellip;" />
+          <div id="settings-form"></div>
+        </div>
+
+        <div class="subpage" id="settings-sub-json" hidden>
+          <p class="hint">
+            Il JSON &egrave; la bozza corrente: ogni modifica valida aggiorna il modulo.
+          </p>
+          <textarea id="settings-json" spellcheck="false" rows="18"></textarea>
+          <pre class="code-block" id="settings-json-errors"></pre>
+          <h3>Differenze salvato &harr; bozza</h3>
+          <div id="settings-diff"></div>
+        </div>
+
+        <div class="subpage" id="settings-sub-unknown" hidden>
+          <p class="hint">
+            Chiavi che lo schema non conosce: conservate cos&igrave; come sono, modificabili come JSON.
+          </p>
+          <div id="settings-unknown"></div>
+        </div>
+
+        <div class="subpage" id="settings-sub-history" hidden>
+          <div class="split">
+            <aside class="list" id="settings-history"></aside>
+            <div class="detail">
+              <div class="bar">
+                <h2 id="settings-history-title">Nessuna versione selezionata</h2>
+                <div class="group">
+                  <button class="btn" id="btn-history-restore">Ripristina</button>
+                </div>
+              </div>
+              <div id="settings-history-diff"></div>
+            </div>
+          </div>
+        </div>
+
+        <pre class="code-block log" id="settings-log"></pre>
       </section>
 
       <!-- --------------------------------------------------- Manager -->

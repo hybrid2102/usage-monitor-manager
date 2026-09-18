@@ -466,3 +466,165 @@ td.actions-col .btn {
 .markdown p {
   margin: 8px 0;
 }
+
+/* ----------------------------------------------------- impostazioni */
+
+.toolbar {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.subtabs {
+  margin: 12px 0 8px;
+  border-bottom: 1px solid var(--border, #333);
+}
+
+.subpage {
+  margin-top: 8px;
+}
+
+#settings-search {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+#settings-form details {
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  margin-bottom: 10px;
+  padding: 4px 10px;
+}
+
+#settings-form summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 6px 0;
+}
+
+.field {
+  border-top: 1px solid var(--border, #2a2a2a);
+  padding: 8px 0;
+}
+
+.field.invalid {
+  border-left: 2px solid #e05050;
+  padding-left: 8px;
+}
+
+.field-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.field-head code {
+  font-weight: 600;
+}
+
+.field-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.field-editor {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.field-editor input[type="text"],
+.field-editor textarea,
+#settings-json,
+#settings-unknown textarea {
+  flex: 1;
+  width: 100%;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  background: #161616;
+  color: inherit;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+.field-editor input.invalid,
+.field-editor textarea.invalid,
+#settings-unknown textarea.invalid {
+  border-color: #e05050;
+}
+
+.field-error {
+  color: #e05050;
+  font-size: 12px;
+  margin: 2px 0 0;
+}
+
+table.diff {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+}
+
+table.diff td {
+  border-bottom: 1px solid var(--border, #2a2a2a);
+  padding: 3px 6px;
+  vertical-align: top;
+}
+
+.diff-added td:nth-child(2) { color: #4ade80; }
+.diff-removed td:nth-child(2) { color: #e05050; }
+.diff-changed td:nth-child(2) { color: #fbbf24; }
+
+.swatches {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid #0006;
+  cursor: pointer;
+  padding: 0;
+}
+
+.preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preview-bar {
+  display: inline-block;
+  width: 90px;
+  height: 10px;
+  background: #333;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.preview-bar i {
+  display: block;
+  width: 65%;
+  height: 100%;
+  background: #4a9eff;
+}
+
+.preview-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+#preview-icon-light { background: #202020; }
+#preview-icon-dark { background: #e6e6e6; }
