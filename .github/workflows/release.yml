@@ -49,11 +49,25 @@ jobs:
       - name: Smoke test the executable
         shell: pwsh
         run: |
-          $exe = "dist\UsageMonitorManager.exe"
-          $printed = (& $exe --version) -join ""
+          # UsageMonitorManager.exe is built --noconsole (it is a tray app):
+          # PowerShell's own "$var = (& $exe args)" capture does not give a
+          # windowed subsystem process a stdout it can actually flush, so use
+          # a real CreateProcess-level redirection instead (Start-Process),
+          # which the app's own AttachConsole/CONOUT$ fallback does not need
+          # to touch at all.
+          $exe = (Resolve-Path "dist\UsageMonitorManager.exe").Path
+          $outFile = Join-Path $env:RUNNER_TEMP "umm-version.out"
+          $errFile = Join-Path $env:RUNNER_TEMP "umm-version.err"
+          $p = Start-Process -FilePath $exe -ArgumentList "--version" -NoNewWindow -PassThru -Wait `
+            -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+          $printed = (Get-Content $outFile -Raw -ErrorAction SilentlyContinue) -join ""
+          $stderr = (Get-Content $errFile -Raw -ErrorAction SilentlyContinue) -join ""
           $pe = (Get-Item $exe).VersionInfo.ProductVersion
           Write-Host "--version: $printed"
+          Write-Host "exit code: $($p.ExitCode)"
+          if ($stderr) { Write-Host "stderr: $stderr" }
           Write-Host "PE ProductVersion: $pe"
+          if ($p.ExitCode -ne 0) { Write-Error "the executable exited with code $($p.ExitCode)"; exit 1 }
           if (-not $printed) { Write-Error "the executable printed no version"; exit 1 }
           if (-not $pe) { Write-Error "the executable carries no PE ProductVersion"; exit 1 }
 
