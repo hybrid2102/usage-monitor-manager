@@ -107,6 +107,23 @@ def test_every_key_used_in_the_sources_exists() -> None:
     assert missing == {}, f"keys used but not translated: {missing}"
 
 
+def test_every_data_i18n_attribute_of_the_page_exists() -> None:
+    """The static labels of index.html are keys too, just in the markup."""
+    known = set(_raw(i18n.DEFAULT_LANGUAGE))
+    html = (SRC / "ui" / "web" / "index.html").read_text(encoding="utf-8")
+    keys = re.findall(r'data-i18n(?:-placeholder|-title)?="([^"]+)"', html)
+    assert len(keys) > 50, "the page lost its data-i18n attributes"
+    assert sorted({key for key in keys if key not in known}) == []
+
+
+def test_the_page_has_a_translation_hook_for_every_tagged_element() -> None:
+    """``applyTranslations`` must cover every attribute the markup uses."""
+    script = (SRC / "ui" / "web" / "app.js").read_text(encoding="utf-8")
+    for attribute in ("[data-i18n]", "[data-i18n-placeholder]", "[data-i18n-title]"):
+        assert attribute in script, f"app.js never fills {attribute}"
+    assert "get_translations" in script
+
+
 def test_the_scan_would_notice_a_missing_key() -> None:
     """Guard for the guard: the regexes must match the shapes we write."""
     assert _PY_KEY.findall('print(T["tray.quit"])') == ["tray.quit"]

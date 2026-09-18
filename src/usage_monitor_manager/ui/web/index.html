@@ -14,15 +14,15 @@
         <span class="version" id="header-version"></span>
       </div>
       <nav class="tabs" role="tablist">
-        <button class="tab" data-page="dashboard" role="tab">Dashboard</button>
-        <button class="tab" data-page="updates" role="tab">Aggiornamenti</button>
-        <button class="tab" data-page="settings" role="tab">Impostazioni</button>
-        <button class="tab" data-page="diag" role="tab">Diagnostica</button>
-        <button class="tab" data-page="manager" role="tab">Manager</button>
+        <button class="tab" data-page="dashboard" role="tab" data-i18n="ui.tab_dashboard">Dashboard</button>
+        <button class="tab" data-page="updates" role="tab" data-i18n="ui.tab_updates">Aggiornamenti</button>
+        <button class="tab" data-page="settings" role="tab" data-i18n="ui.tab_settings">Impostazioni</button>
+        <button class="tab" data-page="diag" role="tab" data-i18n="ui.tab_diagnostics">Diagnostica</button>
+        <button class="tab" data-page="manager" role="tab" data-i18n="ui.tab_manager">Manager</button>
       </nav>
       <div class="topbar-actions">
-        <button class="btn" id="btn-refresh">Aggiorna elenco</button>
-        <button class="btn primary" id="btn-check">Controlla aggiornamenti</button>
+        <button class="btn" id="btn-refresh" data-i18n="ui.refresh_list">Aggiorna elenco</button>
+        <button class="btn primary" id="btn-check" data-i18n="ui.check_updates">Controlla aggiornamenti</button>
       </div>
     </header>
 
@@ -30,33 +30,33 @@
       <!-- ------------------------------------------------ Dashboard -->
       <section class="page" id="page-dashboard">
         <div class="bar">
-          <h1>Istanze</h1>
+          <h1 data-i18n="ui.instances">Istanze</h1>
           <div class="group">
-            <button class="btn" data-bulk="restart_all">Riavvia tutte</button>
-            <button class="btn" data-bulk="stop_all">Ferma tutte</button>
-            <button class="btn" data-bulk="start_missing">Avvia mancanti</button>
+            <button class="btn" data-bulk="restart_all" data-i18n="ui.restart_all">Riavvia tutte</button>
+            <button class="btn" data-bulk="stop_all" data-i18n="ui.stop_all">Ferma tutte</button>
+            <button class="btn" data-bulk="start_missing" data-i18n="ui.start_missing">Avvia mancanti</button>
           </div>
         </div>
         <div class="table-wrap">
           <table id="instances">
             <thead>
               <tr>
-                <th>Tipo</th>
-                <th>Etichetta</th>
-                <th>Config dir</th>
-                <th>Locale</th>
-                <th>Remota</th>
-                <th>Data exe</th>
-                <th>PID</th>
-                <th>Uptime</th>
-                <th>Settings attivo</th>
-                <th>Autostart</th>
-                <th>Stato</th>
-                <th class="actions-col">Azioni</th>
+                <th data-i18n="ui.col_kind">Tipo</th>
+                <th data-i18n="ui.col_label">Etichetta</th>
+                <th data-i18n="ui.col_config_dir">Config dir</th>
+                <th data-i18n="ui.col_local">Locale</th>
+                <th data-i18n="ui.col_remote">Remota</th>
+                <th data-i18n="ui.col_exe_date">Data exe</th>
+                <th data-i18n="ui.col_pid">PID</th>
+                <th data-i18n="ui.col_uptime">Uptime</th>
+                <th data-i18n="ui.col_active_settings">Settings attivo</th>
+                <th data-i18n="ui.col_autostart">Autostart</th>
+                <th data-i18n="ui.col_state">Stato</th>
+                <th class="actions-col" data-i18n="ui.col_actions">Azioni</th>
               </tr>
             </thead>
             <tbody id="instances-body">
-              <tr class="empty"><td colspan="12">Caricamento&hellip;</td></tr>
+              <tr class="empty"><td colspan="12" data-i18n="ui.loading">Caricamento&hellip;</td></tr>
             </tbody>
           </table>
         </div>
@@ -67,7 +67,7 @@
       <!-- --------------------------------------------- Aggiornamenti -->
       <section class="page" id="page-updates">
         <div class="bar">
-          <h1>Aggiornamenti</h1>
+          <h1 data-i18n="ui.tab_updates">Aggiornamenti</h1>
           <span class="hint" id="updates-status"></span>
         </div>
         <div class="split">
@@ -78,15 +78,15 @@
               <div class="bar">
                 <h2 id="update-title"></h2>
                 <div class="group">
-                  <button class="btn primary" id="btn-apply">Aggiorna</button>
-                  <button class="btn" id="btn-skip">Salta questa versione</button>
-                  <button class="btn danger" id="btn-rollback">Rollback</button>
+                  <button class="btn primary" id="btn-apply" data-i18n="ui.update">Aggiorna</button>
+                  <button class="btn" id="btn-skip" data-i18n="ui.skip_version">Salta questa versione</button>
+                  <button class="btn danger" id="btn-rollback" data-i18n="ui.rollback">Rollback</button>
                 </div>
               </div>
               <p class="hint" id="update-meta"></p>
               <div class="progress" id="progress" hidden><div class="progress-fill" id="progress-fill"></div></div>
               <article class="markdown" id="changelog"></article>
-              <h3>Versioni archiviate</h3>
+              <h3 data-i18n="ui.archived_versions">Versioni archiviate</h3>
               <p class="hint">
                 Gli eseguibili sostituiti restano in <span class="mono">.umm-archive</span>
                 accanto al file aggiornato: &ldquo;Ripristina&rdquo; ferma le istanze, rimette
@@ -94,7 +94,7 @@
               </p>
               <div id="archive-list"></div>
             </div>
-            <h3>Log operazione</h3>
+            <h3 data-i18n="ui.operation_log">Log operazione</h3>
             <pre class="code-block log" id="update-log"></pre>
           </div>
         </div>
@@ -103,34 +103,34 @@
       <!-- ----------------------------------------------- Impostazioni -->
       <section class="page" id="page-settings">
         <div class="bar">
-          <h1>Impostazioni</h1>
+          <h1 data-i18n="ui.tab_settings">Impostazioni</h1>
           <select id="settings-instance" aria-label="Istanza"></select>
           <span class="hint" id="settings-state"></span>
         </div>
 
         <div class="bar toolbar">
           <div class="group">
-            <button class="btn primary" id="btn-settings-save">Salva</button>
-            <button class="btn" id="btn-settings-save-restart">Salva e riavvia istanza</button>
-            <button class="btn" id="btn-settings-reload">Ricarica</button>
-            <button class="btn" id="btn-settings-create">Crea file</button>
-            <button class="btn" id="btn-settings-folder">Apri cartella</button>
+            <button class="btn primary" id="btn-settings-save" data-i18n="ui.save">Salva</button>
+            <button class="btn" id="btn-settings-save-restart" data-i18n="ui.save_and_restart">Salva e riavvia istanza</button>
+            <button class="btn" id="btn-settings-reload" data-i18n="ui.reload">Ricarica</button>
+            <button class="btn" id="btn-settings-create" data-i18n="ui.create_file">Crea file</button>
+            <button class="btn" id="btn-settings-folder" data-i18n="ui.open_folder">Apri cartella</button>
           </div>
           <div class="group">
-            <button class="btn" id="btn-settings-copy">Copia da&hellip;</button>
-            <button class="btn" id="btn-settings-export">Esporta</button>
-            <button class="btn" id="btn-settings-import">Importa</button>
-            <button class="btn danger" id="btn-settings-quick">Testa quick action</button>
+            <button class="btn" id="btn-settings-copy" data-i18n="ui.copy_from">Copia da&hellip;</button>
+            <button class="btn" id="btn-settings-export" data-i18n="ui.export">Esporta</button>
+            <button class="btn" id="btn-settings-import" data-i18n="ui.import">Importa</button>
+            <button class="btn danger" id="btn-settings-quick" data-i18n="ui.test_quick_action">Testa quick action</button>
           </div>
         </div>
 
         <div class="bar toolbar">
           <label class="row">
-            <span>Preset brand</span>
+            <span data-i18n="ui.brand_preset">Preset brand</span>
             <select id="settings-preset"></select>
           </label>
           <span class="swatches" id="settings-swatches"></span>
-          <button class="btn" id="btn-settings-preset">Applica preset</button>
+          <button class="btn" id="btn-settings-preset" data-i18n="ui.apply_preset">Applica preset</button>
           <span class="preview" id="settings-preview">
             <span class="preview-bar"><i id="preview-bar-fill"></i></span>
             <span class="preview-icon" id="preview-icon-light">A</span>
@@ -142,29 +142,29 @@
         <p class="hint" id="settings-shadow"></p>
 
         <nav class="tabs subtabs" id="settings-tabs">
-          <button class="tab active" data-subtab="form">Modulo</button>
-          <button class="tab" data-subtab="json">JSON</button>
-          <button class="tab" data-subtab="unknown">Altre chiavi</button>
-          <button class="tab" data-subtab="history">Storico</button>
+          <button class="tab active" data-subtab="form" data-i18n="ui.subtab_form">Modulo</button>
+          <button class="tab" data-subtab="json" data-i18n="ui.subtab_json">JSON</button>
+          <button class="tab" data-subtab="unknown" data-i18n="ui.subtab_unknown">Altre chiavi</button>
+          <button class="tab" data-subtab="history" data-i18n="ui.subtab_history">Storico</button>
         </nav>
 
         <div class="subpage" id="settings-sub-form">
-          <input type="search" id="settings-search" placeholder="Cerca una chiave&hellip;" />
+          <input type="search" id="settings-search" placeholder="Cerca una chiave&hellip;" data-i18n-placeholder="ui.ph_search_key" />
           <div id="settings-form"></div>
         </div>
 
         <div class="subpage" id="settings-sub-json" hidden>
-          <p class="hint">
+          <p class="hint" data-i18n="ui.json_is_the_draft">
             Il JSON &egrave; la bozza corrente: ogni modifica valida aggiorna il modulo.
           </p>
           <textarea id="settings-json" spellcheck="false" rows="18"></textarea>
           <pre class="code-block" id="settings-json-errors"></pre>
-          <h3>Differenze salvato &harr; bozza</h3>
+          <h3 data-i18n="ui.diff_saved_draft">Differenze salvato &harr; bozza</h3>
           <div id="settings-diff"></div>
         </div>
 
         <div class="subpage" id="settings-sub-unknown" hidden>
-          <p class="hint">
+          <p class="hint" data-i18n="ui.unknown_keys_note">
             Chiavi che lo schema non conosce: conservate cos&igrave; come sono, modificabili come JSON.
           </p>
           <div id="settings-unknown"></div>
@@ -175,9 +175,9 @@
             <aside class="list" id="settings-history"></aside>
             <div class="detail">
               <div class="bar">
-                <h2 id="settings-history-title">Nessuna versione selezionata</h2>
+                <h2 id="settings-history-title" data-i18n="ui.no_version_selected">Nessuna versione selezionata</h2>
                 <div class="group">
-                  <button class="btn" id="btn-history-restore">Ripristina</button>
+                  <button class="btn" id="btn-history-restore" data-i18n="ui.restore">Ripristina</button>
                 </div>
               </div>
               <div id="settings-history-diff"></div>
@@ -191,28 +191,28 @@
       <!-- ----------------------------------------------- Diagnostica -->
       <section class="page" id="page-diag">
         <div class="bar">
-          <h1>Diagnostica</h1>
+          <h1 data-i18n="ui.tab_diagnostics">Diagnostica</h1>
           <div class="group">
             <select id="diag-instance"></select>
-            <button class="btn primary" id="btn-diag-start">Avvia con --verbose</button>
-            <button class="btn danger" id="btn-diag-stop">Torna in modalita&rsquo; normale</button>
-            <button class="btn" id="btn-diag-report">Copia diagnostica</button>
+            <button class="btn primary" id="btn-diag-start" data-i18n="ui.start_verbose">Avvia con --verbose</button>
+            <button class="btn danger" id="btn-diag-stop" data-i18n="ui.back_to_normal">Torna in modalita&rsquo; normale</button>
+            <button class="btn" id="btn-diag-report" data-i18n="ui.copy_diagnostics">Copia diagnostica</button>
           </div>
         </div>
         <p class="hint" id="diag-state"></p>
         <div class="bar">
           <div class="group">
             <select id="diag-source"></select>
-            <button class="btn" id="btn-diag-refresh">Aggiorna</button>
+            <button class="btn" id="btn-diag-refresh" data-i18n="ui.update">Aggiorna</button>
             <label class="row">
               <input type="checkbox" id="diag-follow" />
-              <span>Segui (2 s)</span>
+              <span data-i18n="ui.follow_log">Segui (2 s)</span>
             </label>
             <label class="row">
-              <span>Righe</span>
+              <span data-i18n="ui.lines">Righe</span>
               <input type="number" id="diag-lines" min="10" max="5000" value="200" />
             </label>
-            <button class="btn" id="btn-diag-copy">Copia log</button>
+            <button class="btn" id="btn-diag-copy" data-i18n="ui.copy_log">Copia log</button>
           </div>
         </div>
         <pre class="code-block log" id="diag-log"></pre>
@@ -220,67 +220,67 @@
 
       <!-- --------------------------------------------------- Manager -->
       <section class="page" id="page-manager">
-        <h1>Manager</h1>
+        <h1 data-i18n="ui.tab_manager">Manager</h1>
         <div class="cards">
           <div class="panel">
-            <h2>Versione</h2>
+            <h2 data-i18n="ui.version">Versione</h2>
             <p class="mono" id="manager-version"></p>
             <p class="hint" id="manager-exe"></p>
             <p class="hint mono" id="manager-config-path"></p>
           </div>
           <div class="panel">
-            <h2>Preferenze</h2>
+            <h2 data-i18n="ui.preferences">Preferenze</h2>
             <label class="row">
               <input type="checkbox" id="pref-autostart" />
-              <span>Avvia il manager con Windows</span>
+              <span data-i18n="ui.pref_autostart">Avvia il manager con Windows</span>
             </label>
             <label class="row">
               <input type="checkbox" id="pref-notify" />
-              <span>Notifica gli aggiornamenti</span>
+              <span data-i18n="ui.pref_notify">Notifica gli aggiornamenti</span>
             </label>
             <label class="row">
               <input type="checkbox" id="pref-prerelease" />
-              <span>Considera le prerelease</span>
+              <span data-i18n="ui.pref_prerelease">Considera le prerelease</span>
             </label>
             <label class="row">
               <input type="checkbox" id="pref-watchdog" />
-              <span>Sorveglia le istanze (crash, duplicati, coppie incomplete)</span>
+              <span data-i18n="ui.pref_watchdog">Sorveglia le istanze (crash, duplicati, coppie incomplete)</span>
             </label>
             <label class="row">
               <input type="checkbox" id="pref-auto-restart" />
-              <span>Riavvia da solo un&rsquo;istanza che si e&rsquo; chiusa</span>
+              <span data-i18n="ui.pref_auto_restart">Riavvia da solo un&rsquo;istanza che si e&rsquo; chiusa</span>
             </label>
             <label class="row">
-              <span>Controlla ogni</span>
+              <span data-i18n="ui.pref_check_every">Controlla ogni</span>
               <input type="number" id="pref-interval" min="1" max="168" />
-              <span>ore</span>
+              <span data-i18n="ui.hours">ore</span>
             </label>
             <label class="row">
-              <span>Build conservate in .umm-archive</span>
+              <span data-i18n="ui.pref_archive_keep">Build conservate in .umm-archive</span>
               <input type="number" id="pref-archive-keep" min="0" max="20" />
             </label>
           </div>
           <div class="panel">
-            <h2>GitHub</h2>
+            <h2 data-i18n="ui.github">GitHub</h2>
             <p id="github-token"></p>
             <p class="hint" id="github-rate"></p>
             <label class="row">
               <input type="password" id="token-input" placeholder="ghp_&hellip;" autocomplete="off" />
             </label>
             <div class="group">
-              <button class="btn primary" id="btn-token-set">Imposta token&hellip;</button>
-              <button class="btn danger" id="btn-token-clear">Rimuovi token</button>
-              <button class="btn" id="btn-rate-refresh">Aggiorna rate limit</button>
+              <button class="btn primary" id="btn-token-set" data-i18n="ui.set_token">Imposta token&hellip;</button>
+              <button class="btn danger" id="btn-token-clear" data-i18n="ui.clear_token">Rimuovi token</button>
+              <button class="btn" id="btn-rate-refresh" data-i18n="ui.refresh_rate_limit">Aggiorna rate limit</button>
             </div>
             <p class="hint" id="github-target"></p>
           </div>
           <div class="panel">
-            <h2>Aggiornamento del manager</h2>
+            <h2 data-i18n="ui.manager_update">Aggiornamento del manager</h2>
             <p id="self-update-state"></p>
             <div class="group">
-              <button class="btn" id="btn-self-check">Controlla</button>
-              <button class="btn primary" id="btn-self-apply">Aggiorna il manager</button>
-              <button class="btn" id="btn-self-skip">Salta questa versione</button>
+              <button class="btn" id="btn-self-check" data-i18n="ui.check">Controlla</button>
+              <button class="btn primary" id="btn-self-apply" data-i18n="ui.update_manager">Aggiorna il manager</button>
+              <button class="btn" id="btn-self-skip" data-i18n="ui.skip_version">Salta questa versione</button>
             </div>
             <div class="progress" id="self-progress" hidden>
               <div class="progress-fill" id="self-progress-fill"></div>
@@ -288,71 +288,71 @@
             <pre class="code-block log" id="self-update-log"></pre>
           </div>
           <div class="panel">
-            <h2>Scorciatoia e file di stato</h2>
+            <h2 data-i18n="ui.hotkey_and_status">Scorciatoia e file di stato</h2>
             <label class="row">
-              <span>Hotkey globale</span>
+              <span data-i18n="ui.global_hotkey">Hotkey globale</span>
               <input type="text" id="pref-hotkey" placeholder="ctrl+alt+u" autocomplete="off" />
-              <button class="btn" id="btn-hotkey-capture">Cattura</button>
-              <button class="btn" id="btn-hotkey-clear">Rimuovi</button>
+              <button class="btn" id="btn-hotkey-capture" data-i18n="ui.capture">Cattura</button>
+              <button class="btn" id="btn-hotkey-clear" data-i18n="ui.remove">Rimuovi</button>
             </label>
             <p class="hint" id="hotkey-state"></p>
             <label class="row">
-              <span>File di stato</span>
+              <span data-i18n="ui.status_file">File di stato</span>
               <input type="text" id="pref-status-file" placeholder="%LOCALAPPDATA%\UsageMonitorManager\status.json" />
-              <button class="btn" id="btn-status-file-save">Salva</button>
-              <button class="btn" id="btn-status-file-clear">Disattiva</button>
+              <button class="btn" id="btn-status-file-save" data-i18n="ui.save">Salva</button>
+              <button class="btn" id="btn-status-file-clear" data-i18n="ui.disable">Disattiva</button>
             </label>
             <p class="hint" id="status-file-state"></p>
           </div>
           <div class="panel wide">
-            <h2>Tipi gestiti</h2>
+            <h2 data-i18n="ui.managed_kinds">Tipi gestiti</h2>
             <table class="grid" id="kinds-table">
               <thead>
-                <tr><th>Chiave</th><th>Famiglia</th><th>Eseguibile</th><th>Repo</th><th>Origine</th><th></th></tr>
+                <tr><th data-i18n="ui.col_key">Chiave</th><th data-i18n="ui.col_family">Famiglia</th><th data-i18n="ui.col_exe">Eseguibile</th><th data-i18n="ui.col_repo">Repo</th><th data-i18n="ui.col_source">Origine</th><th></th></tr>
               </thead>
               <tbody id="kinds-body"></tbody>
             </table>
-            <h3>Aggiungi un eseguibile aggiornato da GitHub Releases</h3>
+            <h3 data-i18n="ui.add_github_exe">Aggiungi un eseguibile aggiornato da GitHub Releases</h3>
             <div class="group">
-              <input type="text" id="kind-key" placeholder="chiave" />
-              <input type="text" id="kind-name" placeholder="nome visualizzato" />
-              <input type="text" id="kind-exe" placeholder="NomeFile.exe" />
+              <input type="text" id="kind-key" placeholder="chiave" data-i18n-placeholder="ui.ph_key" />
+              <input type="text" id="kind-name" placeholder="nome visualizzato" data-i18n-placeholder="ui.ph_display_name" />
+              <input type="text" id="kind-exe" placeholder="NomeFile.exe" data-i18n-placeholder="ui.ph_exe_name" />
               <input type="text" id="kind-repo" placeholder="owner/repo" />
-              <input type="text" id="kind-asset" placeholder="asset (opzionale)" />
+              <input type="text" id="kind-asset" placeholder="asset (opzionale)" data-i18n-placeholder="ui.ph_asset" />
               <label class="row"><input type="checkbox" id="kind-sidecar" /><span>.sha256</span></label>
-              <button class="btn primary" id="btn-kind-add">Aggiungi</button>
+              <button class="btn primary" id="btn-kind-add" data-i18n="ui.add">Aggiungi</button>
             </div>
             <p class="hint" id="kinds-state"></p>
           </div>
           <div class="panel wide">
-            <h2>Profili di avvio</h2>
+            <h2 data-i18n="ui.launch_profiles">Profili di avvio</h2>
             <table class="grid" id="profiles-table">
               <thead>
-                <tr><th>Profilo</th><th>Istanze</th><th></th></tr>
+                <tr><th data-i18n="ui.col_profile">Profilo</th><th data-i18n="ui.instances">Istanze</th><th></th></tr>
               </thead>
               <tbody id="profiles-body"></tbody>
             </table>
-            <h3>Nuovo profilo</h3>
+            <h3 data-i18n="ui.new_profile">Nuovo profilo</h3>
             <div class="group">
-              <input type="text" id="profile-name" placeholder="nome" />
+              <input type="text" id="profile-name" placeholder="nome" data-i18n-placeholder="ui.ph_name" />
               <select id="profile-instances" multiple size="4"></select>
-              <button class="btn primary" id="btn-profile-save">Salva</button>
+              <button class="btn primary" id="btn-profile-save" data-i18n="ui.save">Salva</button>
             </div>
             <p class="hint" id="profiles-state"></p>
           </div>
           <div class="panel">
-            <h2>Importazione configurazione precedente</h2>
+            <h2 data-i18n="ui.legacy_import">Importazione configurazione precedente</h2>
             <div class="group">
-              <button class="btn" id="btn-import-dry">Anteprima</button>
-              <button class="btn primary" id="btn-import">Importa</button>
+              <button class="btn" id="btn-import-dry" data-i18n="ui.preview">Anteprima</button>
+              <button class="btn primary" id="btn-import" data-i18n="ui.import">Importa</button>
             </div>
             <pre class="code-block log" id="import-log"></pre>
           </div>
         </div>
         <div class="bar">
-          <h2>Log</h2>
+          <h2 data-i18n="ui.log">Log</h2>
           <div class="group">
-            <button class="btn" id="btn-manager-log-refresh">Aggiorna manager.log</button>
+            <button class="btn" id="btn-manager-log-refresh" data-i18n="ui.refresh_manager_log">Aggiorna manager.log</button>
           </div>
         </div>
         <p class="hint mono" id="manager-log-path"></p>

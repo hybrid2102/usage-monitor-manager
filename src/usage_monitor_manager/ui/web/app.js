@@ -30,6 +30,50 @@ const WATCHDOG_LABELS = {
   orphan: "coppia incompleta",
 };
 
+/* --------------------------------------------------------------- i18n */
+
+/* The whole catalog arrives in one call (JsApi.get_translations) and stays
+ * here: a round trip per label over the pywebview bridge would be absurd. The
+ * Italian text is also in the HTML, so the page is readable before the bridge
+ * answers and a key with no translation simply keeps what the markup says. */
+let STRINGS = {};
+
+function t(key, values) {
+  let text = STRINGS[key];
+  if (text === undefined) return key;
+  if (values) {
+    for (const [name, value] of Object.entries(values)) {
+      text = text.split("{" + name + "}").join(String(value));
+    }
+  }
+  return text;
+}
+
+function applyTranslations(root) {
+  const scope = root || document;
+  for (const el of scope.querySelectorAll("[data-i18n]")) {
+    const value = STRINGS[el.dataset.i18n];
+    if (value !== undefined) el.textContent = value;
+  }
+  for (const el of scope.querySelectorAll("[data-i18n-placeholder]")) {
+    const value = STRINGS[el.dataset.i18nPlaceholder];
+    if (value !== undefined) el.placeholder = value;
+  }
+  for (const el of scope.querySelectorAll("[data-i18n-title]")) {
+    const value = STRINGS[el.dataset.i18nTitle];
+    if (value !== undefined) el.title = value;
+  }
+}
+
+async function loadTranslations() {
+  const payload = await call("get_translations");
+  if (payload && payload.strings) {
+    STRINGS = payload.strings;
+    document.documentElement.lang = payload.language || "it";
+    applyTranslations();
+  }
+}
+
 /* ------------------------------------------------------------- helpers */
 
 const $ = (id) => document.getElementById(id);
@@ -1793,6 +1837,7 @@ function whenBridgeReady(callback) {
 function boot() {
   wire();
   whenBridgeReady(() => {
+    loadTranslations();
     loadManager();
     loadPresets();
     refresh();

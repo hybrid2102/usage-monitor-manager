@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from .. import __version__, i18n, manager_config
+from ..i18n import T, t
 from ..model import Instance, JsonDict
 
 __all__ = [
@@ -323,7 +324,7 @@ class JsApi:
 
         plan = self._plan_for(exe_path)
         if plan is None:
-            return {"ok": False, "detail": f"nessun aggiornamento pianificato per {exe_path}"}
+            return {"ok": False, "detail": t("window.no_planned_update", path=exe_path)}
 
         def report(event: Any) -> None:
             self._emit({"type": "update_event", "exe_path": str(exe_path), "event": event.to_dict()})
@@ -397,7 +398,7 @@ class JsApi:
 
         targets = self._by_id([instance_id])
         if not targets:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         try:
             command = process_control.set_instance_autostart(targets[0], bool(enabled), self._registry_root)
         except (OSError, ValueError) as error:
@@ -445,7 +446,7 @@ class JsApi:
         """The instance's settings, its schema, its history and its validation."""
         instance = self._instance(instance_id)
         if instance is None:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         return self._settings_payload(instance)
 
     def get_schema(self, kind: str) -> JsonDict:
@@ -476,12 +477,12 @@ class JsApi:
 
         instance = self._instance(instance_id)
         if instance is None:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         report = store.validate(instance.kind.key, dict(data))
         if report.errors:
             return {
                 "ok": False,
-                "detail": "impostazioni non valide: non è stato scritto nulla",
+                "detail": T["window.settings_invalid"],
                 "validation": report.to_dict(),
             }
         target = instance.settings_path or store.suggested_path(instance)
@@ -491,7 +492,7 @@ class JsApi:
             return {"ok": False, "detail": str(error)}
         payload = self._settings_payload(instance)
         payload["saved_to"] = str(target)
-        payload["detail"] = f"salvato in {target}"
+        payload["detail"] = t("window.saved_to", path=target)
         if restart:
             payload["restart"] = self.restart([instance.instance_id])
         return payload
@@ -502,10 +503,10 @@ class JsApi:
 
         instance = self._instance(instance_id)
         if instance is None:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         target = store.suggested_path(instance)
         if target.is_file():
-            return {"ok": False, "detail": f"{target} esiste già"}
+            return {"ok": False, "detail": t("window.already_exists", path=target)}
         try:
             store.create_default(target)
         except OSError as error:
@@ -513,7 +514,7 @@ class JsApi:
         self._discover()
         instance = self._instance(instance_id) or instance
         payload = self._settings_payload(instance)
-        payload["detail"] = f"creato {target}"
+        payload["detail"] = t("window.created", path=target)
         return payload
 
     # -- history -------------------------------------------------------------
@@ -524,7 +525,7 @@ class JsApi:
 
         instance = self._instance(instance_id)
         if instance is None:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         return {"ok": True, "versions": versions_payload(instance)}
 
     def get_history_version(self, instance_id: str, stamp: str) -> JsonDict:
@@ -534,10 +535,10 @@ class JsApi:
 
         instance = self._instance(instance_id)
         if instance is None:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         data = read_version(instance, str(stamp))
         if data is None:
-            return {"ok": False, "detail": f"versione {stamp!r} non trovata"}
+            return {"ok": False, "detail": t("window.version_not_found", stamp=stamp)}
         current = store.load(instance.settings_path or store.suggested_path(instance)).data
         return {"ok": True, "stamp": stamp, "data": data, "diff": diff_payload(data, current)}
 
@@ -547,15 +548,15 @@ class JsApi:
 
         instance = self._instance(instance_id)
         if instance is None:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         try:
             data = restore(instance, str(stamp))
         except OSError as error:
             return {"ok": False, "detail": str(error)}
         if data is None:
-            return {"ok": False, "detail": f"versione {stamp!r} non trovata"}
+            return {"ok": False, "detail": t("window.version_not_found", stamp=stamp)}
         payload = self._settings_payload(instance)
-        payload["detail"] = f"ripristinata la versione {stamp}"
+        payload["detail"] = t("window.version_restored", stamp=stamp)
         return payload
 
     def _file_dialog(self, *, save: bool, filename: str = "") -> str | None:
@@ -585,15 +586,15 @@ class JsApi:
 
         instance = self._instance(instance_id)
         if instance is None:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         target = dest or self._file_dialog(save=True, filename=f"{instance.instance_id}-settings.json")
         if not target:
-            return {"ok": False, "detail": "esportazione annullata"}
+            return {"ok": False, "detail": T["window.export_cancelled"]}
         try:
             written = export(instance, Path(target))
         except OSError as error:
             return {"ok": False, "detail": str(error)}
-        return {"ok": True, "path": str(written), "detail": f"esportato in {written}"}
+        return {"ok": True, "path": str(written), "detail": t("window.exported_to", path=written)}
 
     def import_settings(self, instance_id: str, src: str | None = None) -> JsonDict:
         """Validate a profile file and, when valid, install it."""
@@ -601,10 +602,10 @@ class JsApi:
 
         instance = self._instance(instance_id)
         if instance is None:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         source = src or self._file_dialog(save=False)
         if not source:
-            return {"ok": False, "detail": "importazione annullata"}
+            return {"ok": False, "detail": T["window.import_cancelled"]}
         result = import_(instance, Path(source))
         payload = result.to_dict()
         if result.ok:
@@ -631,9 +632,9 @@ class JsApi:
         instance = self._instance(instance_id)
         source = self._instance(source_id)
         if instance is None or source is None:
-            return {"ok": False, "detail": "istanza sconosciuta"}
+            return {"ok": False, "detail": T["window.unknown_instance"]}
         if source.kind.key != instance.kind.key:
-            return {"ok": False, "detail": "la copia è possibile solo fra istanze dello stesso tipo"}
+            return {"ok": False, "detail": T["window.copy_same_kind_only"]}
         source_data = store.load(source.settings_path or store.suggested_path(source)).data
         fallback = store.load(instance.settings_path or store.suggested_path(instance)).data
         current = dict(data) if data is not None else fallback
@@ -642,7 +643,7 @@ class JsApi:
             "ok": True,
             "data": merged,
             "validation": store.validate(instance.kind.key, merged).to_dict(),
-            "detail": f"copiate {len(list(sections))} sezioni da {source.instance_id}",
+            "detail": t("window.sections_copied", count=len(list(sections)), source=source.instance_id),
         }
 
     def apply_preset(self, instance_id: str, primary: str, data: JsonDict | None = None) -> JsonDict:
@@ -652,7 +653,7 @@ class JsApi:
 
         instance = self._instance(instance_id)
         if instance is None:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         fallback = store.load(instance.settings_path or store.suggested_path(instance)).data
         current = dict(data) if data is not None else fallback
         try:
@@ -686,7 +687,7 @@ class JsApi:
 
         instance = self._instance(instance_id)
         if instance is None:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         if command is None:
             data = store.load(instance.settings_path or store.suggested_path(instance)).data
             raw: Any = data.get("quick_action_command") or data.get("on_double_click_command") or []
@@ -695,7 +696,7 @@ class JsApi:
         argv = [raw] if isinstance(raw, str) else [str(item) for item in raw]
         argv = [item for item in argv if str(item).strip()]
         if not argv:
-            return {"ok": False, "detail": "nessuna quick action configurata"}
+            return {"ok": False, "detail": T["window.no_quick_action"]}
         single = len(argv) == 1
         try:
             completed = subprocess.run(  # noqa: S602 - the command the user configured, run on request
@@ -716,7 +717,7 @@ class JsApi:
             "returncode": completed.returncode,
             "stdout": completed.stdout,
             "stderr": completed.stderr,
-            "detail": f"uscita {completed.returncode}",
+            "detail": t("window.exit_code", code=completed.returncode),
         }
 
     # -- manager page --------------------------------------------------------
@@ -756,10 +757,10 @@ class JsApi:
         try:
             secrets.set_token(str(token))
         except ValueError:
-            return {"ok": False, "detail": "il token e' vuoto", "present": secrets.has_token()}
+            return {"ok": False, "detail": T["window.token_empty"], "present": secrets.has_token()}
         except secrets.CredentialError as error:
             return {"ok": False, "detail": str(error), "present": secrets.has_token()}
-        return {"ok": True, "detail": "token salvato nel Credential Manager", "present": True}
+        return {"ok": True, "detail": T["window.token_saved"], "present": True}
 
     def clear_github_token(self) -> JsonDict:
         from .. import secrets
@@ -769,7 +770,7 @@ class JsApi:
             "ok": True,
             "removed": removed,
             "present": False,
-            "detail": "token rimosso" if removed else "nessun token era memorizzato",
+            "detail": T["window.token_removed"] if removed else T["window.token_absent"],
         }
 
     def get_rate_limit(self) -> JsonDict:
@@ -837,11 +838,11 @@ class JsApi:
                 None,
             )
         if not tag:
-            return {"ok": False, "detail": f"nessuna release nota per {key}: esegui prima un controllo"}
+            return {"ok": False, "detail": t("window.no_known_release", kind=key)}
         config_module.skip_version(repo, tag, self._config_path)
         if self._scheduler is not None:
             self._scheduler.check_now()
-        return {"ok": True, "repo": repo, "tag": tag, "detail": f"{tag} non verra' piu' proposta"}
+        return {"ok": True, "repo": repo, "tag": tag, "detail": t("window.version_skipped", tag=tag)}
 
     def unskip_version(self, key: str) -> JsonDict:
         from .. import manager_config as config_module
@@ -856,7 +857,7 @@ class JsApi:
         if self._scheduler is not None:
             self._scheduler.forget_notifications()
             self._scheduler.check_now()
-        return {"ok": True, "repo": repo, "detail": "la versione saltata torna disponibile"}
+        return {"ok": True, "repo": repo, "detail": T["window.version_unskipped"]}
 
     def set_repo_prerelease(self, key: str, value: object) -> JsonDict:
         """Per-repo prerelease override; ``None`` falls back to the global flag."""
@@ -912,10 +913,10 @@ class JsApi:
     def repair_instance(self, instance_id: str) -> JsonDict:
         """Act on the worst anomaly of one instance ("Ripara")."""
         if self._watchdog is None:
-            return {"ok": False, "detail": "watchdog non attivo"}
+            return {"ok": False, "detail": T["window.watchdog_off"]}
         events = self._watchdog.state.for_instance(instance_id)
         if not events:
-            return {"ok": False, "detail": f"nessuna anomalia per {instance_id}"}
+            return {"ok": False, "detail": t("window.no_anomaly", instance=instance_id)}
         worst = max(events, key=lambda event: event.severity)
         outcome = self._watchdog.repair(worst)
         self._discover()
@@ -971,7 +972,7 @@ class JsApi:
         """Create or replace one profile."""
         label = str(name).strip()
         if not label:
-            return {"ok": False, "detail": "il nome del profilo e' vuoto"}
+            return {"ok": False, "detail": T["window.profile_name_empty"]}
         ids = tuple(dict.fromkeys(str(item).strip() for item in instance_ids if str(item).strip()))
         try:
             manager_config.upsert_profile(manager_config.Profile(name=label, instance_ids=ids), self._config_path)
@@ -992,7 +993,7 @@ class JsApi:
 
         profile = manager_config.find_profile(self._config(), str(name))
         if profile is None:
-            return {"ok": False, "detail": f"profilo {name!r} sconosciuto"}
+            return {"ok": False, "detail": t("window.unknown_profile", name=name)}
         plan = profiles.plan(profile, self._discover())
         return {"ok": True, **plan.to_dict(), "steps": profiles.describe(plan)}
 
@@ -1002,7 +1003,7 @@ class JsApi:
 
         profile = manager_config.find_profile(self._config(), str(name))
         if profile is None:
-            return {"ok": False, "detail": f"profilo {name!r} sconosciuto"}
+            return {"ok": False, "detail": t("window.unknown_profile", name=name)}
         plan = profiles.plan(profile, self._discover())
         result = profiles.apply_plan(plan, on_event=self._process_event("profile"))
         self._discover()
@@ -1027,7 +1028,7 @@ class JsApi:
 
         instance = self._instance(str(instance_id))
         if instance is None:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         result = diag.start_diagnostics(instance, on_event=self._process_event("diag"))
         self._discover()
         return dict(result.to_dict())
@@ -1037,7 +1038,7 @@ class JsApi:
 
         instance = self._instance(str(instance_id))
         if instance is None:
-            return {"ok": False, "detail": f"istanza {instance_id!r} sconosciuta"}
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
         result = diag.stop_diagnostics(instance, on_event=self._process_event("diag"))
         self._discover()
         return dict(result.to_dict())
@@ -1117,7 +1118,7 @@ class JsApi:
         if target.is_file():
             target = target.parent
         if not target.is_dir():
-            return {"ok": False, "detail": f"{target} non esiste"}
+            return {"ok": False, "detail": t("window.path_missing", path=target)}
         try:
             if sys.platform == "win32":
                 os.startfile(str(target))  # noqa: S606 - a directory the user picked
