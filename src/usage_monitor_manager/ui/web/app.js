@@ -24,10 +24,11 @@ const state = {
   diag: { session: null, source: "", timer: null },
 };
 
+/* Filled from the catalog once the bridge answers (see loadTranslations). */
 const WATCHDOG_LABELS = {
-  crashed: "chiusa da sola",
-  duplicate: "processi doppi",
-  orphan: "coppia incompleta",
+  crashed: "js.watchdog_crashed",
+  duplicate: "js.watchdog_duplicate",
+  orphan: "js.watchdog_orphan",
 };
 
 /* --------------------------------------------------------------- i18n */
@@ -85,13 +86,13 @@ function api() {
 async function call(name, ...args) {
   const bridge = api();
   if (!bridge || typeof bridge[name] !== "function") {
-    log("manager-log", "bridge non disponibile: " + name);
+    log("manager-log", t("js.bridge_unavailable", { name: name }));
     return null;
   }
   try {
     return await bridge[name](...args);
   } catch (error) {
-    log("manager-log", name + " non riuscito: " + error);
+    log("manager-log", t("js.call_failed", { name: name, error: error }));
     return null;
   }
 }
@@ -167,7 +168,7 @@ function renderInstances() {
     tr.className = "empty";
     const td = document.createElement("td");
     td.colSpan = 12;
-    td.textContent = "Nessuna istanza trovata";
+    td.textContent = t("js.no_instances");
     tr.appendChild(td);
     body.appendChild(tr);
     return;
@@ -218,16 +219,22 @@ function renderInstances() {
     const toggle = document.createElement("input");
     toggle.type = "checkbox";
     toggle.checked = Boolean(row.autostart_entry);
-    toggle.title = text(row.autostart_command, "nessuna voce in HKCU\\...\\Run");
+    toggle.title = text(row.autostart_command, t("js.no_run_entry"));
     toggle.disabled = !row.exe_path;
     toggle.addEventListener("change", async () => {
       setBusy(true);
       const result = await call("set_instance_autostart", row.id, toggle.checked);
       if (result && result.ok === false) {
-        log("manager-log", "autostart " + row.id + ": " + text(result.detail));
+        log("manager-log", t("js.autostart_of", { instance: row.id, detail: text(result.detail) }));
         toggle.checked = !toggle.checked;
       } else {
-        log("manager-log", "autostart " + row.id + ": " + (toggle.checked ? "attivato" : "disattivato"));
+        log(
+          "manager-log",
+          t("js.autostart_of", {
+            instance: row.id,
+            detail: toggle.checked ? t("js.enabled") : t("js.disabled_f"),
+          })
+        );
       }
       setBusy(false);
       refresh();
@@ -239,7 +246,7 @@ function renderInstances() {
     if (row.watchdog) {
       const badge = document.createElement("span");
       badge.className = "badge-warn";
-      badge.textContent = WATCHDOG_LABELS[row.watchdog] || row.watchdog;
+      badge.textContent = row.watchdog in WATCHDOG_LABELS ? t(WATCHDOG_LABELS[row.watchdog]) : row.watchdog;
       badge.title = (watchdogEventsFor(row.id)[0] || {}).detail || "";
       health.appendChild(badge);
     } else {
@@ -250,11 +257,11 @@ function renderInstances() {
     const actions = document.createElement("td");
     actions.className = "actions-col";
     const buttons = [
-      ["Riavvia", () => act("restart", row.id), row.is_running],
-      ["Ferma", () => act("stop", row.id), row.is_running],
-      ["Avvia", () => act("start", row.id), !row.is_running && Boolean(row.exe_path)],
-      ["Impostazioni", () => showSettings(row.id), true],
-      ["Cartella", () => call("open_folder", row.config_dir), true],
+      [t("ui.restart_one"), () => act("restart", row.id), row.is_running],
+      [t("ui.stop_one"), () => act("stop", row.id), row.is_running],
+      [t("ui.start_one"), () => act("start", row.id), !row.is_running && Boolean(row.exe_path)],
+      [t("ui.tab_settings"), () => showSettings(row.id), true],
+      [t("ui.folder"), () => call("open_folder", row.config_dir), true],
     ];
     buttons.forEach(([label, handler, enabled]) => {
       const button = document.createElement("button");
@@ -267,14 +274,14 @@ function renderInstances() {
     if (row.watchdog) {
       const repair = document.createElement("button");
       repair.className = "btn small";
-      repair.textContent = "Ripara";
+      repair.textContent = t("ui.repair");
       repair.addEventListener("click", () => repairInstance(row.id));
       actions.appendChild(repair);
     }
     if (row.update_available) {
       const button = document.createElement("button");
       button.className = "btn small primary";
-      button.textContent = "Aggiorna";
+      button.textContent = t("ui.update");
       button.addEventListener("click", () => {
         selectUpdate(row.exe_path);
         goto("updates");
@@ -286,9 +293,11 @@ function renderInstances() {
   });
 
   const running = state.rows.filter((row) => row.is_running).length;
-  $("dashboard-hint").textContent =
-    running + " di " + state.rows.length + " in esecuzione · ultimo controllo aggiornamenti: " +
-    formatDate(state.updates.last_check);
+  $("dashboard-hint").textContent = t("js.dashboard_hint", {
+    running: running,
+    total: state.rows.length,
+    last: formatDate(state.updates.last_check),
+  });
 }
 
 function watchdogEventsFor(id) {
@@ -356,10 +365,10 @@ function renderUpdates() {
   list.textContent = "";
   const plans = planList();
   $("updates-status").textContent = state.updates.error
-    ? "ultimo controllo non riuscito: " + state.updates.error
+    ? t("js.check_failed", { error: state.updates.error })
     : plans.length
-      ? (state.updates.update_count || 0) + " aggiornamenti disponibili"
-      : "nessun controllo eseguito";
+      ? t("js.updates_available", { count: state.updates.update_count || 0 })
+      : t("js.no_check_yet");
 
   plans.forEach((plan) => {
     const button = document.createElement("button");
@@ -386,7 +395,7 @@ async function selectUpdate(exePath) {
   renderUpdates();
   const data = await call("get_changelog", exePath);
   if (!data || !data.tag) {
-    $("changelog").textContent = "Nessun changelog disponibile.";
+    $("changelog").textContent = t("js.no_changelog");
     return;
   }
   $("update-detail").hidden = false;
@@ -404,7 +413,7 @@ function renderDetail() {
   const skipped = (state.updates.skipped || []).some((plan) => plan.exe_path === state.selected);
   $("btn-apply").disabled = state.busy || !outdated;
   $("btn-skip").disabled = state.busy || !(outdated || skipped);
-  $("btn-skip").textContent = skipped ? "Non saltare piu'" : "Salta questa versione";
+  $("btn-skip").textContent = skipped ? t("js.unskip") : t("ui.skip_version");
   renderArchive();
 }
 
@@ -415,7 +424,7 @@ function renderArchive() {
   if (!state.archived.length) {
     const empty = document.createElement("p");
     empty.className = "hint";
-    empty.textContent = "Nessuna build archiviata per questo eseguibile.";
+    empty.textContent = t("js.no_archived_build");
     host.appendChild(empty);
     return;
   }
@@ -431,7 +440,7 @@ function renderArchive() {
       (item.source_release_tag ? " · " + item.source_release_tag : "");
     const button = document.createElement("button");
     button.className = "btn small";
-    button.textContent = "Ripristina";
+    button.textContent = t("ui.restore");
     button.disabled = state.busy || !item.exists;
     button.addEventListener("click", () => restoreArchived(item.version));
     row.appendChild(label);
@@ -478,7 +487,7 @@ async function applyUpdate() {
   setBusy(true);
   $("progress").hidden = false;
   $("progress-fill").style.width = "0%";
-  log("update-log", "aggiornamento di " + state.selected);
+  log("update-log", t("js.updating", { target: state.selected }));
   const result = await call("apply_update", state.selected);
   if (result) log("update-log", (result.ok ? "OK: " : "ERRORE: ") + text(result.detail));
   $("progress").hidden = true;
@@ -537,8 +546,8 @@ async function refreshDiag() {
   state.diag.source = source.value;
 
   $("diag-state").textContent = data.session
-    ? data.session.instance_id + " in modalita' diagnostica · " + data.session.log_path
-    : "nessuna istanza in modalita' diagnostica";
+    ? t("js.diag_active", { instance: data.session.instance_id, path: data.session.log_path })
+    : t("js.diag_none");
   if (data.session && source.value === data.session.log_path) {
     $("diag-log").textContent = (data.lines || []).join("\n");
   } else {
@@ -573,18 +582,18 @@ async function copyDiagReport() {
   const id = (state.diag.session && state.diag.session.instance_id) || $("diag-instance").value;
   const lines = Number($("diag-lines").value) || 200;
   const result = await call("diag_report", id, lines);
-  if (result && result.text) copyText(result.text, "diagnostica copiata negli appunti");
+  if (result && result.text) copyText(result.text, t("js.diag_copied"));
 }
 
 function copyText(value, message) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(value).then(
       () => log("diag-log", message),
-      () => log("diag-log", "copia non riuscita")
+      () => log("diag-log", t("js.copy_failed"))
     );
     return;
   }
-  log("diag-log", "copia non disponibile in questa finestra");
+  log("diag-log", t("js.copy_unavailable"));
 }
 
 function toggleFollow() {
@@ -603,7 +612,7 @@ async function loadManager() {
   const info = await call("get_manager_info");
   if (info) {
     $("header-version").textContent = info.version;
-    $("manager-version").textContent = "Usage Monitor Manager " + info.version;
+    $("manager-version").textContent = t("js.manager_version", { version: info.version });
     $("manager-exe").textContent = (info.frozen ? "eseguibile: " : "da sorgente: ") + info.executable;
     $("manager-config-path").textContent = info.config_path;
     $("pref-autostart").checked = Boolean(info.autostart);
@@ -622,11 +631,11 @@ async function loadManager() {
     $("pref-hotkey").value = config.preferences.hotkey || "";
     $("pref-status-file").value = config.preferences.status_file || "";
     $("hotkey-state").textContent = config.preferences.hotkey
-      ? "attiva al prossimo avvio della tray"
-      : "nessuna scorciatoia registrata";
+      ? t("js.hotkey_next_start")
+      : t("js.hotkey_none");
     $("status-file-state").textContent = config.preferences.status_file
-      ? "riscritto dopo ogni ciclo della tray"
-      : "disattivato";
+      ? t("js.status_file_on")
+      : t("js.disabled_f");
   }
   await loadKinds();
   await loadProfiles();
@@ -659,7 +668,7 @@ async function loadKinds() {
     if (kind.source === "custom") {
       const remove = document.createElement("button");
       remove.className = "btn danger";
-      remove.textContent = "Rimuovi";
+      remove.textContent = t("ui.remove");
       remove.addEventListener("click", () => removeKind(kind.key));
       actions.appendChild(remove);
     }
@@ -681,7 +690,7 @@ async function addKind() {
   const result = await call("add_kind", payload);
   setBusy(false);
   if (!result) return;
-  $("kinds-state").textContent = result.ok ? "tipo aggiunto" : (result.problems || []).join(" · ");
+  $("kinds-state").textContent = result.ok ? t("js.kind_added") : (result.problems || []).join(" · ");
   if (result.ok) {
     ["kind-key", "kind-name", "kind-exe", "kind-repo", "kind-asset"].forEach((id) => ($(id).value = ""));
     await loadKinds();
@@ -693,7 +702,7 @@ async function removeKind(key) {
   setBusy(true);
   const result = await call("remove_kind", key);
   setBusy(false);
-  $("kinds-state").textContent = result && result.removed ? "tipo rimosso" : "nessun tipo definito dall'utente";
+  $("kinds-state").textContent = result && result.removed ? t("js.kind_removed") : t("js.no_custom_kind");
   await loadKinds();
   await refresh();
 }
@@ -713,11 +722,11 @@ async function loadProfiles() {
     const actions = document.createElement("td");
     const apply = document.createElement("button");
     apply.className = "btn primary";
-    apply.textContent = "Applica";
+    apply.textContent = t("ui.apply");
     apply.addEventListener("click", () => applyProfile(profile.name));
     const remove = document.createElement("button");
     remove.className = "btn danger";
-    remove.textContent = "Rimuovi";
+    remove.textContent = t("ui.remove");
     remove.addEventListener("click", () => deleteProfile(profile.name));
     actions.appendChild(apply);
     actions.appendChild(remove);
@@ -740,13 +749,13 @@ async function saveProfile() {
   const name = $("profile-name").value.trim();
   const ids = Array.from($("profile-instances").selectedOptions).map((option) => option.value);
   if (!name || !ids.length) {
-    $("profiles-state").textContent = "servono un nome e almeno un'istanza";
+    $("profiles-state").textContent = t("js.profile_needs_members");
     return;
   }
   setBusy(true);
   const result = await call("save_profile", name, ids);
   setBusy(false);
-  $("profiles-state").textContent = result && result.ok ? "profilo salvato" : text(result && result.detail);
+  $("profiles-state").textContent = result && result.ok ? t("js.profile_saved") : text(result && result.detail);
   $("profile-name").value = "";
   await loadProfiles();
 }
@@ -764,7 +773,9 @@ async function applyProfile(name) {
   setBusy(true);
   const result = await call("apply_profile", name);
   setBusy(false);
-  if (result) log("manager-log", "profilo " + name + ": " + (result.ok ? "applicato" : "con errori"));
+  if (result) {
+    log("manager-log", t(result.ok ? "js.profile_applied" : "js.profile_errors", { name: name }));
+  }
   await refresh();
 }
 
@@ -774,8 +785,8 @@ async function saveHotkey(value) {
   const result = await call("set_hotkey", value);
   if (!result) return;
   $("hotkey-state").textContent = result.ok
-    ? "salvata: attiva al prossimo avvio della tray"
-    : "non valida: " + text(result.detail);
+    ? t("js.hotkey_saved")
+    : t("js.hotkey_invalid", { detail: text(result.detail) });
   if (result.ok) $("pref-hotkey").value = result.hotkey || "";
 }
 
@@ -804,22 +815,27 @@ async function saveStatusFile(value) {
   if (!result) return;
   $("status-file-state").textContent = result.ok
     ? value
-      ? "scritto in " + text(result.written)
-      : "disattivato"
-    : "non scritto: " + text(result.detail);
+      ? t("js.status_file_written", { path: text(result.written) })
+      : t("js.disabled_f")
+    : t("js.status_file_failed", { detail: text(result.detail) });
 }
 
 function renderToken(info) {
   const stored = info.github_token_stored;
   const source = info.github_token_source;
   $("github-token").textContent = info.github_token_present
-    ? "Token GitHub: presente" + (stored ? " (Credential Manager)" : " (variabile " + source + ")")
-    : "Token GitHub: assente (richieste anonime, 60/ora)";
+    ? t("js.token_present") +
+      (stored ? t("js.token_from_store") : t("js.token_from_env", { name: source }))
+    : t("js.token_absent");
   const rate = info.rate_limit;
   $("github-rate").textContent = rate
-    ? "rate limit: " + text(rate.remaining) + "/" + text(rate.limit) + " · reset " + formatDate(rate.reset_at)
-    : "rate limit: nessuna chiamata in questa sessione";
-  $("github-target").textContent = "credenziale: " + text(info.credential_target);
+    ? t("js.rate_limit", {
+        remaining: text(rate.remaining),
+        limit: text(rate.limit),
+        reset: formatDate(rate.reset_at),
+      })
+    : t("js.rate_limit_unknown");
+  $("github-target").textContent = t("js.credential_target", { target: text(info.credential_target) });
   $("btn-token-clear").disabled = !stored;
 }
 
@@ -827,23 +843,23 @@ function renderSelfUpdate(own) {
   const box = $("self-update-state");
   const version = state.manager ? state.manager.version : "";
   if (!own) {
-    box.textContent = "Manager " + version + " · nessun controllo eseguito";
+    box.textContent = t("js.manager_no_check", { version: version });
   } else {
-    box.textContent = "Manager " + version + " · " + text(own.detail);
+    box.textContent = t("js.manager_detail", { version: version, detail: text(own.detail) });
   }
   const available = Boolean(own && own.available);
   const frozen = Boolean(state.manager && state.manager.frozen);
   $("btn-self-apply").disabled = state.busy || !available || !frozen;
-  $("btn-self-apply").title = frozen ? "" : "disponibile solo per UsageMonitorManager.exe";
+  $("btn-self-apply").title = frozen ? "" : t("js.self_update_frozen_only");
   $("btn-self-skip").disabled = state.busy || !(own && own.tag);
-  $("btn-self-skip").textContent = own && own.skipped ? "Non saltare piu'" : "Salta questa versione";
+  $("btn-self-skip").textContent = own && own.skipped ? t("js.unskip") : t("ui.skip_version");
 }
 
 async function setToken() {
   const field = $("token-input");
   const value = field.value;
   if (!value.trim()) {
-    log("manager-log", "token: campo vuoto, niente da salvare");
+    log("manager-log", t("js.token_field_empty"));
     return;
   }
   setBusy(true);
@@ -884,7 +900,7 @@ async function applySelfUpdate() {
   setBusy(true);
   $("self-progress").hidden = false;
   $("self-progress-fill").style.width = "0%";
-  log("self-update-log", "aggiornamento del manager…");
+  log("self-update-log", t("js.self_updating"));
   const result = await call("apply_self_update");
   if (result) log("self-update-log", (result.ok ? "OK: " : "ERRORE: ") + text(result.detail));
   $("self-progress").hidden = true;
@@ -900,13 +916,17 @@ async function skipSelfUpdate() {
 
 async function setPreference(key, value) {
   const result = await call("set_preference", key, value);
-  log("manager-log", "preferenza " + key + " = " + value + (result && result.ok === false ? " NON salvata" : ""));
+  log(
+    "manager-log",
+    t("js.preference_set", { key: key, value: value }) +
+      (result && result.ok === false ? t("js.preference_not_saved") : "")
+  );
 }
 
 async function runImport(dryRun) {
   const report = await call("import_legacy", dryRun);
   const box = $("import-log");
-  box.textContent = report ? (report.lines || []).join("\n") : "importazione non riuscita";
+  box.textContent = report ? (report.lines || []).join("\n") : t("js.import_failed");
   if (!dryRun) await refresh();
 }
 
@@ -1067,8 +1087,8 @@ function applyValidation(report) {
     if (slot) slot.textContent = message || "";
   });
   $("settings-state").textContent = errors.length
-    ? errors.length + " valori non validi"
-    : dirtyCount() + " modifiche non salvate";
+    ? t("js.invalid_values", { count: errors.length })
+    : t("js.unsaved_changes", { count: dirtyCount() });
 }
 
 function dirtyCount() {
@@ -1104,7 +1124,7 @@ function buildControl(field) {
 
   const reset = document.createElement("button");
   reset.className = "btn small";
-  reset.textContent = "Reset al default";
+  reset.textContent = t("ui.reset_to_default");
   reset.addEventListener("click", () => {
     setKey(field.key, clone(field.default));
     renderForm();
@@ -1148,7 +1168,7 @@ function buildControl(field) {
         area.classList.remove("invalid");
       } catch (error) {
         area.classList.add("invalid");
-        settingsLog(field.key + ": JSON non valido (" + error + ")");
+        settingsLog(t("js.invalid_json_for", { key: field.key, error: error }));
       }
     });
     editor.appendChild(area);
@@ -1173,7 +1193,7 @@ function buildControl(field) {
         input.classList.remove("invalid");
       } catch (error) {
         input.classList.add("invalid");
-        settingsLog(field.key + ": valore non interpretabile (" + error + ")");
+        settingsLog(t("js.unparsable_value", { key: field.key, error: error }));
       }
     });
     editor.appendChild(input);
@@ -1238,7 +1258,7 @@ function buildFamily(field) {
       input.addEventListener("change", () => setKey(key, textToValue(field, input.value)));
       const remove = document.createElement("button");
       remove.className = "btn small danger";
-      remove.textContent = "Rimuovi";
+      remove.textContent = t("ui.remove");
       remove.addEventListener("click", () => {
         setKey(key, undefined);
         renderForm();
@@ -1264,7 +1284,7 @@ function buildFamily(field) {
   });
   const add = document.createElement("button");
   add.className = "btn small";
-  add.textContent = "Aggiungi";
+  add.textContent = t("ui.add");
   add.addEventListener("click", () => {
     const key = picker.value.trim();
     if (!key.startsWith(field.key)) {
@@ -1341,7 +1361,7 @@ function renderDiffInto(host, rows) {
   if (!rows.length) {
     const empty = document.createElement("p");
     empty.className = "hint";
-    empty.textContent = "Nessuna differenza.";
+    empty.textContent = t("js.no_difference");
     host.appendChild(empty);
     return;
   }
@@ -1375,7 +1395,7 @@ function renderUnknownTab() {
   if (!keys.length) {
     const empty = document.createElement("p");
     empty.className = "hint";
-    empty.textContent = "Nessuna chiave sconosciuta.";
+    empty.textContent = t("js.no_unknown_key");
     host.appendChild(empty);
     return;
   }
@@ -1393,12 +1413,12 @@ function renderUnknownTab() {
         area.classList.remove("invalid");
       } catch (error) {
         area.classList.add("invalid");
-        settingsLog(key + ": JSON non valido (" + error + ")");
+        settingsLog(t("js.invalid_json_for", { key: key, error: error }));
       }
     });
     const remove = document.createElement("button");
     remove.className = "btn small danger";
-    remove.textContent = "Rimuovi";
+    remove.textContent = t("ui.remove");
     remove.addEventListener("click", () => {
       setKey(key, undefined);
       renderUnknownTab();
@@ -1475,7 +1495,7 @@ function renderHistory() {
   if (!versions.length) {
     const empty = document.createElement("p");
     empty.className = "hint";
-    empty.textContent = "Nessuna versione archiviata.";
+    empty.textContent = t("js.no_archived_version");
     host.appendChild(empty);
     return;
   }
@@ -1502,13 +1522,13 @@ async function selectVersion(stamp) {
     settingsLog("storico: " + text(result && result.detail));
     return;
   }
-  $("settings-history-title").textContent = "Versione " + stamp;
+  $("settings-history-title").textContent = t("js.version_stamp", { stamp: stamp });
   renderDiffInto($("settings-history-diff"), result.diff.map((line) => line));
 }
 
 async function restoreVersion() {
   if (!settings.instanceId || !settings.historyStamp) return;
-  if (!window.confirm("Ripristinare la versione " + settings.historyStamp + "? Il file attuale viene archiviato.")) return;
+  if (!window.confirm(t("js.confirm_restore", { stamp: settings.historyStamp }))) return;
   const result = await call("restore_history", settings.instanceId, settings.historyStamp);
   if (!result || result.ok === false) {
     settingsLog("ripristino: " + text(result && result.detail));
@@ -1525,11 +1545,13 @@ function applySettingsPayload(payload) {
   settings.schema = payload.schema || settings.schema;
   settings.saved = clone(payload.data) || {};
   settings.draft = clone(payload.data) || {};
-  $("settings-file").textContent = payload.path + (payload.exists ? "" : "  (non esiste)");
+  $("settings-file").textContent = payload.path + (payload.exists ? "" : t("js.file_missing_suffix"));
   $("settings-shadow").textContent =
-    payload.shadowed && payload.shadowed.length ? "File ignorati (ombra): " + payload.shadowed.join(", ") : "";
+    payload.shadowed && payload.shadowed.length
+      ? t("js.shadowed_files", { files: payload.shadowed.join(", ") })
+      : "";
   $("btn-settings-create").disabled = Boolean(payload.exists);
-  if (payload.error) settingsLog("lettura: " + payload.error);
+  if (payload.error) settingsLog(t("js.read_error", { error: payload.error }));
   renderForm();
   renderHistory();
   refreshSettingsDerived();
@@ -1574,12 +1596,12 @@ function showSubtab(name) {
 
 async function saveSettings(restart) {
   if (!settings.instanceId) return;
-  if (restart && !window.confirm("Salvare e riavviare l'istanza? Il monitor viene fermato e riavviato.")) return;
+  if (restart && !window.confirm(t("js.confirm_save_restart"))) return;
   setBusy(true);
   const result = await call("save_settings", settings.instanceId, settings.draft, Boolean(restart));
   setBusy(false);
   if (!result || result.ok === false) {
-    settingsLog("salvataggio non riuscito: " + text(result && result.detail));
+    settingsLog(t("js.save_failed", { detail: text(result && result.detail) }));
     if (result && result.validation) applyValidation(result.validation);
     return;
   }
@@ -1594,27 +1616,27 @@ async function copyFromInstance() {
     (row) => row.id !== settings.instanceId && row.kind === settings.schema.kind
   );
   if (!others.length) {
-    settingsLog("nessun'altra istanza dello stesso tipo");
+    settingsLog(t("js.no_other_instance"));
     return;
   }
   const source = window.prompt(
-    "Copia da quale istanza?\n" + others.map((row) => row.id).join("\n"),
+    t("js.prompt_copy_from") + "\n" + others.map((row) => row.id).join("\n"),
     others[0].id
   );
   if (!source) return;
   const sections = window.prompt(
-    "Quali sezioni? (separate da virgola)\n" + settings.schema.section_order.join(", "),
+    t("js.prompt_sections") + "\n" + settings.schema.section_order.join(", "),
     settings.schema.section_order.join(",")
   );
   if (!sections) return;
   const wanted = sections.split(",").map((item) => item.trim()).filter(Boolean);
   const result = await call("copy_settings_from", settings.instanceId, source, wanted, settings.draft);
   if (!result || result.ok === false) {
-    settingsLog("copia: " + text(result && result.detail));
+    settingsLog(t("js.copy_detail", { detail: text(result && result.detail) }));
     return;
   }
   settings.draft = result.data;
-  settingsLog(text(result.detail) + " (non ancora salvato)");
+  settingsLog(text(result.detail) + t("js.not_saved_yet"));
   renderForm();
   refreshSettingsDerived();
 }
@@ -1624,10 +1646,10 @@ async function testQuickAction() {
   const command = settings.draft.quick_action_command || settings.draft.on_double_click_command;
   const shown = Array.isArray(command) ? command.join(" ") : String(command || "");
   if (!shown) {
-    settingsLog("nessuna quick action configurata");
+    settingsLog(t("js.no_quick_action"));
     return;
   }
-  if (!window.confirm("Eseguire davvero la quick action?\n\n" + shown)) return;
+  if (!window.confirm(t("js.confirm_quick_action") + "\n\n" + shown)) return;
   setBusy(true);
   const result = await call("test_quick_action", settings.instanceId, command);
   setBusy(false);
@@ -1741,7 +1763,7 @@ function wire() {
   $("btn-refresh").addEventListener("click", refresh);
   $("btn-check").addEventListener("click", async () => {
     setBusy(true);
-    log("manager-log", "controllo aggiornamenti…");
+    log("manager-log", t("js.checking_updates"));
     const result = await call("check_updates");
     if (result) state.updates = result;
     setBusy(false);
@@ -1765,9 +1787,9 @@ function wire() {
     const result = await call("set_manager_autostart", checked);
     if (result && result.ok === false) {
       event.target.checked = !checked;
-      log("manager-log", "autostart manager: " + text(result.detail));
+      log("manager-log", t("js.autostart_manager", { detail: text(result.detail) }));
     } else {
-      log("manager-log", "autostart manager: " + (checked ? "attivo" : "disattivo"));
+      log("manager-log", t("js.autostart_manager", { detail: checked ? t("js.on") : t("js.off") }));
     }
   });
   $("pref-notify").addEventListener("change", (e) => setPreference("notify_updates", e.target.checked));
@@ -1781,7 +1803,7 @@ function wire() {
   $("btn-diag-stop").addEventListener("click", stopDiag);
   $("btn-diag-report").addEventListener("click", copyDiagReport);
   $("btn-diag-refresh").addEventListener("click", refreshDiag);
-  $("btn-diag-copy").addEventListener("click", () => copyText($("diag-log").textContent, "log copiato"));
+  $("btn-diag-copy").addEventListener("click", () => copyText($("diag-log").textContent, t("js.log_copied")));
   $("diag-follow").addEventListener("change", toggleFollow);
   $("diag-source").addEventListener("change", (e) => {
     state.diag.source = e.target.value;
