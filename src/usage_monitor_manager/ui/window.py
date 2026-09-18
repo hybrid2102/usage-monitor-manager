@@ -39,7 +39,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from .. import __version__, manager_config
+from .. import __version__, i18n, manager_config
 from ..model import Instance, JsonDict
 
 __all__ = [
@@ -353,14 +353,31 @@ class JsApi:
         payload["config_path"] = str(self._config_path or manager_config.config_path())
         return payload
 
+    def get_translations(self) -> JsonDict:
+        """The whole active catalog, so the page labels itself in one call.
+
+        The page asks for this once at load and keeps it: a round trip per
+        label would be absurd over the pywebview bridge. ``language`` is the
+        code that was actually resolved (``auto`` already applied).
+        """
+        return {"language": i18n.language(), "strings": i18n.translations()}
+
     def set_preference(self, key: str, value: object) -> JsonDict:
-        """Change one preference; the answer is the whole new config."""
+        """Change one preference; the answer is the whole new config.
+
+        Changing ``language`` activates the new catalog immediately, so the
+        tray menu (rebuilt on every open) and a reloaded page are already in
+        the new language.
+        """
         try:
             updated = manager_config.set_preference(key, value, self._config_path)
         except (KeyError, OSError) as error:
             return {"ok": False, "detail": str(error)}
+        if key == "language":
+            i18n.set_language(updated.preferences.language)
         payload = updated.to_dict()
         payload["ok"] = True
+        payload["language"] = i18n.language()
         return payload
 
     def set_manager_autostart(self, enabled: bool) -> JsonDict:

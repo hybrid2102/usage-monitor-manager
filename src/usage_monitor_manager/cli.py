@@ -1914,9 +1914,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
     _attach_console_if_frozen(raw_args)
     reconfigure_stdout()
-    from . import diag
+    from . import diag, i18n, manager_config
     from . import kinds as kind_registry
 
+    # The language has to be active before the parser is built: every help
+    # string and every message below comes from the catalog.
+    i18n.set_language(manager_config.load().preferences.language)
     # The user-defined kinds must be in the registry before the parser is
     # built: they are valid --kind values (PLAN.md section 9.9).
     for problem in kind_registry.reload():

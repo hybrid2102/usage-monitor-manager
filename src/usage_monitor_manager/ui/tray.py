@@ -27,7 +27,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from .. import __version__, diag, legacy, manager_config, platform
+from .. import __version__, diag, i18n, legacy, manager_config, platform
+from ..i18n import T, t
 from ..model import JsonDict
 from ..scheduler import UpdateScheduler
 from ..watchdog import Watchdog
@@ -187,10 +188,10 @@ def _instance_text(row: JsonDict) -> str:
     version = row.get("local_version") or "?"
     running = bool(row.get("is_running"))
     mark = RUNNING_MARK if running else STOPPED_MARK
-    state = "in esecuzione" if running else "non in esecuzione"
+    state = T["state.running"] if running else T["state.stopped"]
     text = f"{label} \u00b7 {short_path(str(row.get('config_dir', '')))}  {version}  {mark} {state}"
     if row.get("update_available"):
-        text += f"  \u2191 {row.get('remote_version') or '?'} disponibile"
+        text += "  " + t("tray.instance_update_suffix", version=row.get("remote_version") or "?")
     return text
 
 
@@ -199,31 +200,31 @@ def _instance_submenu(row: JsonDict) -> tuple[MenuEntry, ...]:
     running = bool(row.get("is_running"))
     has_exe = bool(row.get("exe_path"))
     entries: list[MenuEntry] = [
-        MenuEntry("Riavvia", "restart", (instance_id,), enabled=running),
-        MenuEntry("Ferma", "stop", (instance_id,), enabled=running),
-        MenuEntry("Avvia", "start", (instance_id,), enabled=not running and has_exe),
+        MenuEntry(T["tray.restart"], "restart", (instance_id,), enabled=running),
+        MenuEntry(T["tray.stop"], "stop", (instance_id,), enabled=running),
+        MenuEntry(T["tray.start"], "start", (instance_id,), enabled=not running and has_exe),
         SEPARATOR,
-        MenuEntry("Impostazioni\u2026", "settings", (instance_id,)),
-        MenuEntry("Apri cartella", "open_folder", (str(row.get("config_dir", "")),)),
+        MenuEntry(T["tray.settings"], "settings", (instance_id,)),
+        MenuEntry(T["tray.open_folder"], "open_folder", (str(row.get("config_dir", "")),)),
     ]
     if row.get("update_available"):
         entries.extend(
             [
                 SEPARATOR,
                 MenuEntry(
-                    f"Aggiorna a {row.get('remote_version') or '?'}\u2026",
+                    t("tray.update_to", version=row.get("remote_version") or "?"),
                     "update",
                     (str(row.get("exe_path") or ""),),
                     enabled=has_exe,
                 ),
-                MenuEntry("Salta questa versione", "skip_version", (str(row.get("kind") or ""),)),
+                MenuEntry(T["tray.skip_version"], "skip_version", (str(row.get("kind") or ""),)),
             ]
         )
     if row.get("watchdog"):
         entries.extend(
             [
                 SEPARATOR,
-                MenuEntry(f"Ripara: {row.get('watchdog')}", "repair", (instance_id,)),
+                MenuEntry(t("tray.repair", finding=row.get("watchdog")), "repair", (instance_id,)),
             ]
         )
     return tuple(entries)
@@ -241,37 +242,37 @@ def _manager_text(state: JsonDict, version: str) -> str:
     """``Manager 0.7.0 (aggiornato)`` / ``(0.8.0 disponibile)`` / ``(nessuna release)``."""
     own = _self_update_state(state)
     if not own:
-        return f"Manager {version}"
+        return t("tray.manager", version=version)
     if own.get("available"):
-        return f"Manager {version} \u2014 {own.get('target_version') or '?'} disponibile"
+        return t("tray.manager_available", version=version, target=own.get("target_version") or "?")
     status = str(own.get("status") or "")
     if status == "unknown":
-        return f"Manager {version} \u2014 nessuna release"
+        return t("tray.manager_no_release", version=version)
     if own.get("skipped"):
-        return f"Manager {version} \u2014 {own.get('target_version') or '?'} saltata"
-    return f"Manager {version} (aggiornato)"
+        return t("tray.manager_skipped", version=version, target=own.get("target_version") or "?")
+    return t("tray.manager_up_to_date", version=version)
 
 
 def _last_check_text(last_check: str | None) -> str:
     if not last_check:
-        return "Controlla aggiornamenti (mai)"
+        return T["tray.check_never"]
     try:
         stamp = datetime.fromisoformat(last_check).astimezone()
     except ValueError:
-        return "Controlla aggiornamenti (mai)"
-    return f"Controlla aggiornamenti (ultimo: {stamp:%H:%M})"
+        return T["tray.check_never"]
+    return t("tray.check_last", time=f"{stamp:%H:%M}")
 
 
 def _profile_submenu(profiles: Sequence[JsonDict]) -> tuple[MenuEntry, ...]:
     """The "Profili" submenu of PLAN.md section 9.13, one entry per profile."""
     if not profiles:
-        return (MenuEntry("Nessun profilo", None, enabled=False),)
+        return (MenuEntry(T["tray.no_profile"], None, enabled=False),)
     entries: list[MenuEntry] = []
     for profile in profiles:
         name = str(profile.get("name", ""))
         members = profile.get("instance_ids")
         count = len(cast("list[object]", members)) if isinstance(members, list) else 0
-        entries.append(MenuEntry(f"{name} ({count})", "apply_profile", (name,)))
+        entries.append(MenuEntry(t("tray.profile_entry", name=name, count=count), "apply_profile", (name,)))
     return tuple(entries)
 
 
@@ -289,7 +290,7 @@ def build_menu_spec(
     state = update_state or {}
     entries: list[MenuEntry] = []
     if not rows:
-        entries.append(MenuEntry("Nessuna istanza trovata", None, enabled=False))
+        entries.append(MenuEntry(T["tray.no_instances"], None, enabled=False))
     for row in rows:
         entries.append(
             MenuEntry(_instance_text(row), None, submenu=_instance_submenu(row), extra={"id": row.get("id")})
@@ -300,17 +301,17 @@ def build_menu_spec(
     entries.extend(
         [
             SEPARATOR,
-            MenuEntry("Riavvia tutte", "restart_all", enabled=any_running),
-            MenuEntry("Ferma tutte", "stop_all", enabled=any_running),
-            MenuEntry("Avvia mancanti", "start_missing", enabled=any_stopped),
-            MenuEntry("Profili", None, submenu=_profile_submenu(profiles)),
+            MenuEntry(T["tray.restart_all"], "restart_all", enabled=any_running),
+            MenuEntry(T["tray.stop_all"], "stop_all", enabled=any_running),
+            MenuEntry(T["tray.start_missing"], "start_missing", enabled=any_stopped),
+            MenuEntry(T["tray.profiles"], None, submenu=_profile_submenu(profiles)),
             SEPARATOR,
             MenuEntry(
                 _last_check_text(state.get("last_check")),
                 "check",
                 enabled=not bool(state.get("checking")),
             ),
-            MenuEntry("Apri Manager\u2026", "open_window", default=True),
+            MenuEntry(T["tray.open_manager"], "open_window", default=True),
             SEPARATOR,
             MenuEntry(_manager_text(state, version), None, enabled=False),
         ]
@@ -319,13 +320,16 @@ def build_menu_spec(
     if own.get("available"):
         entries.extend(
             [
-                MenuEntry(f"Aggiorna il manager a {own.get('target_version') or '?'}\u2026", "self_update"),
-                MenuEntry("Salta questa versione", "skip_version", ("manager",)),
+                MenuEntry(
+                    t("tray.update_manager_to", version=own.get("target_version") or "?"),
+                    "self_update",
+                ),
+                MenuEntry(T["tray.skip_version"], "skip_version", ("manager",)),
             ]
         )
     entries.extend(
         [
-            MenuEntry("Esci", "quit"),
+            MenuEntry(T["tray.quit"], "quit"),
         ]
     )
     return tuple(entries)
@@ -404,13 +408,12 @@ class TrayApp:
         for event in events:
             _log.info("watchdog %s: %s", event.type, event.detail)
             if event.type == "crashed":
-                text = f"{event.instance_id} si e' chiuso da solo"
-                text += " ed e' stato riavviato" if event.repaired else "; apri il manager per riavviarlo"
+                key = "watchdog.crashed_restarted" if event.repaired else "watchdog.crashed"
             elif event.type == "duplicate":
-                text = f"{event.instance_id}: due processi per la stessa istanza"
+                key = "watchdog.duplicate"
             else:
-                text = f"{event.instance_id}: coppia di processi incompleta"
-            self.notify(text, "Watchdog")
+                key = "watchdog.orphan"
+            self.notify(t(key, instance=event.instance_id), T["watchdog.title"])
         self.refresh_icon()
 
     def rows(self, *, refresh: bool = True) -> list[JsonDict]:
@@ -496,7 +499,7 @@ class TrayApp:
             try:
                 work()
             except Exception as error:  # noqa: BLE001 - reported as a notification
-                self.notify(f"{name} non riuscito: {error}", "Usage Monitor Manager")
+                self.notify(t("tray.action_failed", action=name, error=error), T["app.name"])
             finally:
                 self.refresh_icon()
 
@@ -546,7 +549,7 @@ class TrayApp:
         if action == "apply_profile":
             name = str(args[0]) if args else ""
             _log.info("tray: applying profile %s", name)
-            self._in_worker("profilo", lambda: api.apply_profile(name))
+            self._in_worker(T["tray.action_profile"], lambda: api.apply_profile(name))
             return
 
     def open_window(self, page: str = "dashboard", **params: object) -> None:
@@ -559,17 +562,17 @@ class TrayApp:
             if focus:
                 window.show(page, str(focus))
 
-        self._in_worker("apri manager", work)
+        self._in_worker(T["tray.action_open_manager"], work)
 
     # -- icon state ----------------------------------------------------------
 
-    def notify(self, message: str, title: str = "Usage Monitor Manager") -> None:
+    def notify(self, message: str, title: str | None = None) -> None:
         """A Windows balloon through pystray; silently ignored when unavailable."""
         icon = self._icon
         if icon is None:
             return
         try:
-            icon.notify(message, title)
+            icon.notify(message, title if title is not None else T["app.name"])
         except Exception:  # noqa: BLE001 - notifications are never load-bearing
             return
 
@@ -585,7 +588,7 @@ class TrayApp:
             toggle_window(self._api)
 
         _log.info("hotkey: toggling the manager window")
-        self._in_worker("hotkey", work)
+        self._in_worker(T["tray.action_hotkey"], work)
 
     def refresh_icon(self) -> None:
         """Redraw the badge and let the shell know the menu changed."""
@@ -604,15 +607,18 @@ class TrayApp:
     def tooltip(self) -> str:
         state = self._scheduler.state
         running = sum(1 for row in self._rows if row.get("is_running"))
-        parts = [f"Usage Monitor Manager {__version__}", f"{running}/{len(self._rows)} in esecuzione"]
+        parts = [
+            f"{T['app.name']} {__version__}",
+            t("tray.tooltip_running", running=running, total=len(self._rows)),
+        ]
         if state.error is not None:
-            parts.append("ultimo controllo non riuscito")
+            parts.append(T["tray.tooltip_check_failed"])
         elif state.update_count:
-            parts.append(f"{state.update_count} aggiornamenti disponibili")
+            parts.append(t("tray.tooltip_updates", count=state.update_count))
         anomalies = self._watchdog.state.events
         if anomalies:
             kinds = ", ".join(sorted({event.type for event in anomalies}))
-            parts.append(f"{len(anomalies)} anomalie ({kinds})")
+            parts.append(t("tray.tooltip_anomalies", count=len(anomalies), kinds=kinds))
         return " \u2014 ".join(parts)
 
     def on_updates_available(self, plans: Sequence[Any]) -> None:
@@ -621,16 +627,21 @@ class TrayApp:
         for plan in plans:
             _log.info("update available: %s %s", plan.kind.display_name, plan.target.version)
             self.notify(
-                f"{plan.kind.display_name} {plan.target.version} disponibile (hai la {plan.current_version or '?'})",
-                "Aggiornamento disponibile",
+                t(
+                    "notify.update_body",
+                    name=plan.kind.display_name,
+                    version=plan.target.version,
+                    current=plan.current_version or "?",
+                ),
+                T["notify.update_title"],
             )
         self.refresh_icon()
 
     def on_self_update_available(self, check: Any) -> None:
         """Scheduler callback: the manager itself has a newer release."""
         self.notify(
-            f"Manager {check.target_version} disponibile (hai la {check.current_version})",
-            "Aggiornamento del manager",
+            t("notify.manager_update_body", version=check.target_version, current=check.current_version),
+            T["notify.manager_update_title"],
         )
         self.refresh_icon()
 
@@ -642,7 +653,7 @@ class TrayApp:
         icon = pystray.Icon(
             "usage-monitor-manager",
             icon=make_image(),
-            title=f"Usage Monitor Manager {__version__}",
+            title=f"{T['app.name']} {__version__}",
             menu=pystray.Menu(self.menu_items),
         )
         self._icon = icon
@@ -681,11 +692,11 @@ def _startup_housekeeping(config_path: Path | None) -> list[str]:
         try:
             platform.sync_manager_autostart_path()
         except OSError as error:  # pragma: no cover - registry refusal
-            messages.append(f"autostart non sincronizzato: {error}")
+            messages.append(t("app.autostart_not_synced", error=error))
     report = legacy.run_once(config_path)
     if report is not None and report.added:
         names = ", ".join(entry.label or entry.kind for entry in report.added)
-        messages.append(f"importate {len(report.added)} istanze dalla configurazione precedente: {names}")
+        messages.append(t("app.legacy_imported", count=len(report.added), names=names))
     return messages
 
 
@@ -719,11 +730,11 @@ def start_hotkey(app: TrayApp, config_path: Path | None = None) -> Any | None:
         listener = platform.HotkeyListener(combo, app.toggle_window)
     except platform.HotkeyError as error:
         _log.warning("hotkey %s not registered: %s", combo, error)
-        app.notify(f"Hotkey non valida: {error}")
+        app.notify(t("hotkey.invalid", error=error))
         return None
     if not listener.start():
         _log.warning("hotkey %s not registered: %s", combo, listener.error)
-        app.notify(f"Hotkey {combo} non registrata: {listener.error}")
+        app.notify(t("hotkey.not_registered", combo=combo, error=listener.error))
         return None
     _log.info("hotkey %s registered", combo)
     return listener
@@ -742,9 +753,10 @@ def run_tray(
     icon exists, which is how ``--post-update`` says "Manager aggiornato alla
     vX.Y.Z".
     """
+    i18n.set_language(manager_config.load(config_path).preferences.language)
     holder = acquire_mutex(wait_for_mutex)
     if holder is None:
-        print("Usage Monitor Manager e' gia' in esecuzione (icona nella tray).")
+        print(T["app.already_running"])
         return 1
 
     notes = [*messages, *_startup_housekeeping(config_path)]
