@@ -8,6 +8,79 @@ Ogni versione corrisponde a una fase del piano di sviluppo (`PLAN.md`, §7).
 
 ## [Non rilasciato]
 
+## [0.8.0] - 2026-09-18
+
+Fase 7 - estensioni. Il manager non gestisce piu' solo i tre monitor: sa
+descrivere qualsiasi eseguibile portabile aggiornato da GitHub Releases, sa
+avviare un'istanza in modalita' diagnostica, pubblica il proprio stato su file,
+applica insiemi di istanze con un clic e si apre con una combinazione di tasti.
+
+### Aggiunto
+
+- **Kind generico «exe da GitHub Releases»** (sezione 9.9) - il registro dei
+  tipi ha ora due famiglie. `usage-monitor` e' un membro della famiglia dei
+  monitor (config dir, env var, suffisso di istanza, file di settings);
+  `github-exe` e' il caso generale: un eseguibile portabile senza config dir,
+  senza variabile d'ambiente e senza settings, una sola istanza per percorso.
+  Il built-in `agent-monitor-claude` (`AgentMonitorForClaude.exe`, stesso
+  autore e stessa cartella dei monitor) e' il primo caso. Gli altri si
+  dichiarano in `custom_kinds` di `manager-config.json` - a mano, con
+  `umm kind add`, o dal form della pagina Manager - e vengono uniti ai built-in
+  all'avvio: un kind definito dall'utente e' a tutti gli effetti parte della
+  discovery, del motore di update, del watchdog e della UI. Una voce non valida
+  viene **saltata e spiegata**, non fa cadere il registro. Un `github-exe` non
+  ha il proprio ambiente letto (niente `environ()`: sarebbe il rischio della
+  sezione 8 senza alcun guadagno) e viene trovato, quando e' fermo, solo nelle
+  cartelle in cui la discovery ha gia' identificato un eseguibile - mai con una
+  scansione del disco. CLI: `umm kind list|add|remove`.
+- **Modalita' diagnostica** (sezione 9.7) - `diag.py` riavvia un'istanza con
+  `--verbose` e cattura stdout e stderr su
+  `%LOCALAPPDATA%\UsageMonitorManager\logs\<istanza>\<data>.log`; `stop` la
+  riporta in modalita' normale. Quale istanza sia verbosa e' registrato in
+  `diag.json`, perche' il flag vive nel processo e non in un file che il monitor
+  legge: senza quella nota un manager riavviato non potrebbe dirlo. Uno stop
+  fallito non lancia nulla, come in `process_control.restart`. Il bottone
+  «Copia diagnostica» produce il blocco da incollare in una issue upstream
+  (versioni, path, ultime righe di log, `umm status --json` ridotto: nessun
+  dump dell'ambiente, nessun token). CLI: `umm diag start|stop|show`, con
+  `--dry-run`.
+- **`manager.log`** - file rotante 1 MB x 3 in `logs\`, a cui scrivono tray,
+  finestra, scheduler, watchdog e updater; la pagina Manager ne mostra la coda.
+  Un logging che non riesce a scrivere (`%LOCALAPPDATA%` in sola lettura)
+  lascia il logger senza handler e non impedisce l'avvio.
+- **File di stato `status.json`** (sezione 9.11) - `status_file.py` scrive, in
+  modo **atomico** (file temporaneo + rename), lo stesso documento di
+  `umm status --json`, dove indica la preferenza `status_file`; la tray lo
+  riscrive dopo ogni ciclo. Serve a statusline e script: nessun processo Python
+  da avviare, nessuna chiamata di rete, e `generated_at` per accorgersi che il
+  manager non gira piu'. Schema ed esempio di consumo in
+  [`docs/status-file.md`](docs/status-file.md). Nuovo
+  `umm status --write-file [PERCORSO]`.
+- **Profili di avvio** (sezione 9.13) - `profiles.py`: un nome e un elenco di
+  id di istanza in `manager-config.json`. Applicare un profilo avvia i membri
+  che non girano e ferma i **non** membri - ma solo quelli della famiglia
+  `usage-monitor`: un `github-exe` fuori dal profilo resta in esecuzione e
+  viene segnalato, perche' terminare in silenzio un agent monitor e' esattamente
+  la sorpresa che questo manager esiste per evitare. `plan` calcola tutto senza
+  toccare niente (ed e' cio' che stampa `--dry-run`), `apply_plan` e' l'unica
+  funzione che ferma o avvia, con lo stesso intervallo di due secondi fra due
+  start. CLI `umm profile list|add|remove|show|apply` (`--dry-run`, `--yes`,
+  `--no-stop-others`) e submenu «Profili» nella tray.
+- **Hotkey globale** (sezione 9.14) - `RegisterHotKey` in ctypes puro, senza
+  `pynput`: la preferenza `hotkey` (es. `ctrl+alt+u`) apre o nasconde la
+  finestra del manager. Registrazione, loop `GetMessageW` e deregistrazione
+  stanno sullo stesso thread, come Windows richiede; fermare significa postare
+  `WM_QUIT`, non alzare un flag. Almeno un modificatore e' obbligatorio
+  (Windows registrerebbe un tasto nudo sequestrandolo a tutto il sistema) e una
+  combinazione occupata da un'altra applicazione viene riportata in chiaro
+  accanto al campo. I punti di ingresso Windows sono iniettabili, cosi' i test
+  coprono tutto il ciclo di vita senza sequestrare nulla sulla macchina.
+
+### Documentazione
+
+- `docs/status-file.md` - schema del documento, come si attiva, esempio di
+  statusline in Node e in PowerShell.
+
 ## [0.7.0] - 2026-09-18
 
 Fase 6 - self-update e robustezza. Il manager sa aggiornare se stesso, conserva
@@ -245,7 +318,10 @@ Fase 0 — scheletro.
   pre-commit, CI su `windows-latest`, registro dei tipi di monitor
   (`kinds.py`), modello di dominio (`model.py`) e README in italiano.
 
-[Non rilasciato]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.5.0...HEAD
+[Non rilasciato]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.2.0...v0.3.0

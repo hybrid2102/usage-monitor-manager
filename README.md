@@ -23,7 +23,11 @@ Claude condividono lo stesso eseguibile.
 ## Documentazione
 
 Il piano di sviluppo completo (ricognizione, decisioni architetturali, design
-dei moduli, fasi) è in [PLAN.md](PLAN.md).
+dei moduli, fasi) è in [PLAN.md](PLAN.md); lo stato di avanzamento in
+[STATUS.md](STATUS.md).
+
+- [`docs/status-file.md`](docs/status-file.md) — schema di `status.json` e
+  esempi per statusline e script.
 
 ## Setup di sviluppo
 
@@ -60,7 +64,10 @@ umm skip --kind copilot|manager   /   umm unskip --kind copilot|manager
 umm config show|validate|set KEY VALUE|unset KEY|create|export DEST|import SRC|history|diff [N]|restore N --instance ID
 umm token set|clear|status [--from-env VAR] [--json]
 umm self-update [--check-only] [--yes] [--dry-run] [--json]
-umm status [--json] [--check]
+umm status [--json] [--check] [--write-file [PERCORSO]]
+umm kind list|add KEY --exe-name FILE --repo OWNER/NAME|remove KEY [--json]
+umm diag start|stop|show [--instance ID] [--lines N] [--dry-run] [--json]
+umm profile list|add NAME --instance ID|remove NAME|show NAME|apply NAME [--yes] [--dry-run] [--no-stop-others]
 umm tray
 umm import-legacy [--dry-run] [--json]
 umm autostart --manager [on|off|status] [--json]
@@ -279,7 +286,7 @@ chiamata di rete** se non si passa `--check`.
 ```
 > umm status --json
 {
-  "version": "0.7.0",
+  "version": "0.8.0",
   "instances": [
     { "id": "claude", "kind": "claude", "label": "Claude", "local_version": "1.22.0", "is_running": true, "pid": 9980 },
     { "id": "claude_578560bbc610", "kind": "claude", "label": "Claude Valeria", "local_version": "1.22.0", "is_running": true, "pid": 4512 },
@@ -292,6 +299,85 @@ chiamata di rete** se non si passa `--check`.
   "watchdog": { "last_poll": "2026-09-18T12:13:12+00:00", "count": 0, "events": [] }
 }
 ```
+
+### Altri eseguibili gestiti (kind «exe da GitHub Releases»)
+
+Il registro dei tipi ha due famiglie. `usage-monitor` è un monitor della
+famiglia (config dir, env var, suffisso, settings); `github-exe` è il caso
+generale: un eseguibile portabile tenuto aggiornato da GitHub Releases, senza
+config dir, senza variabile d'ambiente e senza settings, una sola istanza per
+percorso. `AgentMonitorForClaude.exe` è il primo caso già incluso.
+
+```
+umm kind list [--json]
+umm kind add statusline --display-name "Statusline Helper" \
+  --exe-name StatuslineHelper.exe --repo hybrid2102/statusline-helper \
+  [--asset-pattern Statusline-win.exe] [--sha-sidecar] [--pe-product-name "..."]
+umm kind remove statusline
+```
+
+Le voci aggiunte finiscono in `custom_kinds` di `manager-config.json` (anche dal
+form della pagina Manager) e diventano parte a tutti gli effetti di discovery,
+update, watchdog e UI. Una voce non valida viene **saltata con una spiegazione**,
+non fa cadere il registro; un `github-exe` non ha mai il proprio ambiente letto
+e, da fermo, viene cercato solo nelle cartelle dove la discovery ha già trovato
+un eseguibile — mai con una scansione del disco.
+
+### Modalità diagnostica
+
+```
+umm diag start --instance claude_578560bbc610 [--dry-run]
+umm diag show [--lines 200] [--json]
+umm diag stop [--instance ID] [--dry-run]
+```
+
+`start` riavvia l'istanza con `--verbose` e cattura stdout e stderr in
+`%LOCALAPPDATA%\UsageMonitorManager\logs\<istanza>\<data>.log`; `stop` la
+riporta in modalità normale. Quale istanza è verbosa sta in `diag.json`, perché
+il flag vive nel processo e non in un file: senza quella nota un manager
+riavviato non saprebbe dirlo. Uno stop fallito non lancia nulla. Il tab
+«Diagnostica» mostra il log e il bottone «Copia diagnostica» prepara il blocco
+da incollare in una issue upstream (versioni, path, ultime righe, `umm status`
+ridotto: nessun dump dell'ambiente, nessun token).
+
+Il manager scrive inoltre il proprio `logs\manager.log`, rotante 1 MB × 3.
+
+### File di stato per statusline e script
+
+```
+umm status --write-file                 # %LOCALAPPDATA%\UsageMonitorManager\status.json
+umm status --write-file D:\tmp\umm.json
+```
+
+La preferenza `status_file` fa riscrivere lo stesso documento dalla tray dopo
+ogni ciclo. La scrittura è atomica (file temporaneo + rename) e il documento è
+offline se non si passa `--check`. Schema, note per chi lo consuma ed esempi in
+[`docs/status-file.md`](docs/status-file.md).
+
+### Profili di avvio
+
+```
+umm profile add Lavoro --instance claude --instance copilot
+umm profile list [--json]
+umm profile show Lavoro
+umm profile apply Lavoro [--yes] [--dry-run] [--no-stop-others]
+```
+
+Applicare un profilo avvia i membri che non girano e ferma i non membri — ma
+**solo** quelli della famiglia `usage-monitor`: un `github-exe` fuori dal
+profilo resta in esecuzione e viene segnalato. Il piano è calcolato senza
+toccare niente (`--dry-run`, `show`, e la conferma prima di applicare) e fra due
+avvii passano gli stessi due secondi del riavvio normale. La tray ha un submenu
+«Profili».
+
+### Hotkey globale
+
+La preferenza `hotkey` (per esempio `ctrl+alt+u`) apre o nasconde la finestra
+del manager. È `RegisterHotKey` in ctypes puro, nessuna dipendenza aggiuntiva.
+Almeno un modificatore è obbligatorio, perché Windows registrerebbe volentieri
+un tasto nudo sequestrandolo a tutto il sistema; se la combinazione è già di
+un'altra applicazione il campo lo dice in chiaro invece di non fare nulla. Il
+campo nelle preferenze ha un bottone «cattura» per comporla premendola.
 
 ### Build
 
@@ -307,6 +393,13 @@ tutto su `windows-latest` e pubblica l'exe con il suo `.sha256`, usando la
 sezione corrispondente di `CHANGELOG.md` come note.
 
 ## Stato
+
+**Fase 7 (Estensioni) completata** (`v0.8.0`): il registro dei tipi descrive
+anche gli eseguibili portabili aggiornati da GitHub Releases
+(`AgentMonitorForClaude.exe` e i kind definiti dall'utente), un'istanza può
+girare in modalità diagnostica con il log a schermo, lo stato è pubblicato su
+`status.json` per statusline e script, i profili di avvio applicano un insieme
+di istanze con un clic e una combinazione globale apre la finestra.
 
 **Fase 6 (Self-update e robustezza) completata** (`v0.7.0`): il manager
 aggiorna se stesso (`umm self-update`, `--post-update`), tiene il token GitHub
@@ -483,7 +576,18 @@ Dalla Fase 6:
   `umm rollback --version`, `umm status --json` e `umm update --all --yes` con
   i codici di uscita e il log JSON per il Task Scheduler.
 
-Restano alla fase 7 il kind generico «exe da GitHub Releases» (§9.9), la
-modalità diagnostica (§9.7), il file `status.json` scritto dalla tray (§9.11),
-i profili di avvio (§9.13) e l'hotkey globale (§9.14); PLAN.md §7 tiene il
-quadro.
+Dalla Fase 7:
+
+- `kinds.py` — due famiglie (`usage-monitor`, `github-exe`), `custom_kinds`
+  uniti ai built-in con validazione che salta e spiega le voci sbagliate;
+- `diag.py` — modalità diagnostica (`--verbose` su file, `diag.json`, blocco
+  diagnostica da incollare) e `manager.log` rotante;
+- `status_file.py` — `status.json` scritto in modo atomico dalla tray e da
+  `umm status --write-file`;
+- `profiles.py` — insiemi di istanze, con la regola che un profilo non ferma
+  mai un `github-exe`;
+- `platform/win32.py` — hotkey globale in ctypes (`RegisterHotKey`, loop
+  `GetMessageW`, `WM_QUIT` per fermare), con i punti di ingresso iniettabili.
+
+Resta la fase 8: i18n it/en, gestione errori uniforme, doc utente, stub Linux
+documentato e dismissione dei due repo vecchi; PLAN.md §7 tiene il quadro.
