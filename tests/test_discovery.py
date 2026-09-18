@@ -15,10 +15,11 @@ from pathlib import Path
 import psutil
 import pytest
 
-from usage_monitor_manager import discovery
+from usage_monitor_manager import discovery, manager_config
 from usage_monitor_manager.discovery import ProcessSnapshot
 from usage_monitor_manager.identity import config_dir_suffix
 from usage_monitor_manager.kinds import get_kind
+from usage_monitor_manager.manager_config import DeclaredInstance
 from usage_monitor_manager.model import Instance
 
 SETTINGS = discovery.SETTINGS_FILENAME
@@ -337,3 +338,83 @@ def test_scan_processes_on_the_real_machine() -> None:
     assert snapshots
     assert any(snapshot.exe is not None for snapshot in snapshots)
     assert all(isinstance(snapshot.pid, int) for snapshot in snapshots)
+
+
+# --------------------------------------------------------------------------- #
+# Source (d): instances declared in manager-config.json
+# --------------------------------------------------------------------------- #
+
+
+def test_declared_instance_is_a_dormant_source(machine: Machine) -> None:
+    exe = machine.exe("UsageMonitorForClaude.exe")
+    machine.pair(exe, bootloader_pid=32472, app_pid=32520)
+    valeria = machine.config_dir(".claude-valeria", with_settings=False)
+
+    instances = discovery.discover(
+        declared=[DeclaredInstance(kind="claude", config_dir=valeria, label="Claude Valeria")]
+    )
+    by_id = _by_id(instances)
+    declared = by_id[f"claude{config_dir_suffix(valeria, machine.home / '.claude')}"]
+    assert declared.sources == (discovery.SOURCE_DECLARED,)
+    assert declared.label == "Claude Valeria"
+    assert declared.is_running is False
+    assert declared.exe_path == exe  # the kind's known executable is reused
+
+
+def test_declared_label_reaches_a_running_instance(machine: Machine) -> None:
+    exe = machine.exe("UsageMonitorForClaude.exe")
+    default = machine.config_dir(".claude")
+    machine.pair(exe, bootloader_pid=32472, app_pid=32520)
+
+    instances = discovery.discover(declared=[DeclaredInstance(kind="claude", config_dir=default, label="Principale")])
+    assert len(instances) == 1
+    assert instances[0].label == "Principale"
+    assert instances[0].is_running is True
+    assert discovery.SOURCE_PROCESS in instances[0].sources
+    assert discovery.SOURCE_DECLARED in instances[0].sources
+
+
+def test_disabled_declared_instance_is_ignored(machine: Machine) -> None:
+    machine.exe("UsageMonitorForCodex.exe")
+    hidden = machine.config_dir(".codex-hidden", with_settings=False)
+    instances = discovery.discover(declared=[DeclaredInstance(kind="codex", config_dir=hidden, enabled=False)])
+    assert instances == []
+
+
+def test_declared_instance_with_an_unknown_kind_is_ignored(machine: Machine) -> None:
+    instances = discovery.discover(
+        declared=[DeclaredInstance(kind="gemini", config_dir=machine.home / ".gemini", label="Future")]
+    )
+    assert instances == []
+
+
+def test_declared_instances_are_not_added_without_dormant(machine: Machine) -> None:
+    exe = machine.exe("UsageMonitorForClaude.exe")
+    machine.pair(exe, bootloader_pid=1, app_pid=2)
+    valeria = machine.config_dir(".claude-valeria", with_settings=False)
+    instances = discovery.discover(
+        include_dormant=False,
+        declared=[DeclaredInstance(kind="claude", config_dir=valeria, label="Claude Valeria")],
+    )
+    assert [i.config_dir for i in instances] == [machine.home / ".claude"]
+
+
+def test_declared_defaults_to_the_manager_config_file(
+    machine: Machine,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``declared=None`` reads the real file - which the fixture has relocated."""
+    config_path = tmp_path / "LocalAppData" / "UsageMonitorManager" / "manager-config.json"
+    machine.exe("UsageMonitorForCopilot.exe")
+    work = machine.config_dir(".copilot-work", with_settings=False)
+    manager_config.save(
+        manager_config.ManagerConfig(
+            instances=(DeclaredInstance(kind="copilot", config_dir=work, label="Copilot Lavoro"),)
+        ),
+        config_path,
+    )
+    assert manager_config.config_path() == config_path
+
+    instances = discovery.discover()
+    assert [i.label for i in instances] == ["Copilot Lavoro"]

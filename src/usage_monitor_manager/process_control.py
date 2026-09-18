@@ -53,13 +53,17 @@ __all__ = [
     "RestartResult",
     "StartResult",
     "StopResult",
+    "autostart_command",
     "build_argv",
     "build_env",
     "build_env_overrides",
     "describe_start",
     "describe_stop",
+    "get_instance_autostart",
     "is_default_config_dir",
     "mutex_name",
+    "run_key_name",
+    "set_instance_autostart",
     "restart",
     "restart_all",
     "start",
@@ -274,6 +278,62 @@ def build_argv(instance: Instance) -> list[str]:
     if not is_default_config_dir(instance):
         argv.append(f"{CONFIG_DIR_FLAG}={instance.config_dir}")
     return argv
+
+
+def run_key_name(instance: Instance) -> str:
+    """The autostart value name the monitor itself would use.
+
+    ``UsageMonitorForClaude`` for the default directory,
+    ``UsageMonitorForClaude_578560bbc610`` for ``~/.claude-valeria``: the same
+    ``run_key_base + suffix`` the monitors write, which is what lets the
+    manager toggle *their* entry instead of inventing a parallel one.
+    """
+    return f"{instance.kind.run_key_base}{instance.instance_suffix}"
+
+
+def autostart_command(instance: Instance) -> str:
+    """The exact command the monitor writes into its own Run entry.
+
+    ``"<exe>"`` for a default config dir,
+    ``"<exe>" --config-dir="<dir>"`` otherwise - quoted the way the monitors
+    quote it, so that an entry written here is byte-comparable with one the
+    monitor rewrites at its next startup.
+
+    Raises:
+        ValueError: when the instance has no known executable (a dormant entry
+            discovered from a settings file alone cannot be autostarted).
+    """
+    if instance.exe_path is None:
+        raise ValueError(f"instance {instance.instance_id} has no executable path")
+    command = f'"{instance.exe_path}"'
+    if not is_default_config_dir(instance):
+        command += f' {CONFIG_DIR_FLAG}="{instance.config_dir}"'
+    return command
+
+
+def get_instance_autostart(instance: Instance, root: platform.RegistryRoot | None = None) -> str | None:
+    """The instance's stored autostart command, ``None`` when it has none."""
+    return platform.read_run_key(run_key_name(instance), root)
+
+
+def set_instance_autostart(
+    instance: Instance,
+    enabled: bool,
+    root: platform.RegistryRoot | None = None,
+) -> str | None:
+    """Write or remove the instance's autostart entry; returns what is stored.
+
+    Raises:
+        ValueError: see :func:`autostart_command`.
+        OSError: when the registry write fails.
+    """
+    name = run_key_name(instance)
+    if not enabled:
+        platform.delete_run_key(name, root)
+        return None
+    command = autostart_command(instance)
+    platform.write_run_key(name, command, root)
+    return command
 
 
 def build_env_overrides(instance: Instance) -> dict[str, str]:

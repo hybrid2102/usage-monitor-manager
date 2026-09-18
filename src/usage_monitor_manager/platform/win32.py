@@ -26,18 +26,27 @@ from typing import Any, cast
 
 __all__ = [
     "CREATE_NO_WINDOW",
+    "DEFAULT_RUN_ROOT",
     "DETACHED_PROCESS",
+    "MANAGER_RUN_NAME",
     "RUN_KEY_PATH",
+    "MutexHolder",
+    "RegistryRoot",
     "authenticode_status",
     "delete_run_key",
     "file_product_name",
     "file_version",
+    "get_manager_autostart",
+    "hold_mutex",
+    "manager_autostart_command",
     "mutex_is_held",
     "no_window_popen_kwargs",
     "parse_run_command",
     "read_run_entries",
     "read_run_key",
     "read_shortcuts",
+    "set_manager_autostart",
+    "sync_manager_autostart_path",
     "write_run_key",
 ]
 
@@ -174,11 +183,26 @@ def file_product_name(path: Path | str) -> str | None:
     return None if block is None else _string_value(block, "ProductName")
 
 
-def read_run_entries() -> dict[str, str]:
+RegistryRoot = tuple[int, str]
+"""``(hive, subkey)``: which key the autostart helpers read and write.
+
+Every function below takes one as an optional argument so that tests can point
+them at a scratch key (``HKCU\\Software\\UsageMonitorManagerTest\\Run``) instead
+of the real ``HKCU\\...\\Run``, which a test run must never touch.
+"""
+
+DEFAULT_RUN_ROOT: RegistryRoot = (winreg.HKEY_CURRENT_USER, RUN_KEY_PATH)
+
+MANAGER_RUN_NAME = "UsageMonitorManager"
+"""The manager's own autostart value name (PLAN.md section 6.5)."""
+
+
+def read_run_entries(root: RegistryRoot | None = None) -> dict[str, str]:
     """Every string value of ``HKCU\\...\\Run``, as ``{name: command}``."""
+    hive, subkey = root or DEFAULT_RUN_ROOT
     entries: dict[str, str] = {}
     try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH)
+        key = winreg.OpenKey(hive, subkey)
     except OSError:
         return entries
     with key:
@@ -194,24 +218,99 @@ def read_run_entries() -> dict[str, str]:
     return entries
 
 
-def read_run_key(name: str) -> str | None:
+def read_run_key(name: str, root: RegistryRoot | None = None) -> str | None:
     """Read a single autostart entry, ``None`` when absent."""
-    return read_run_entries().get(name)
+    return read_run_entries(root).get(name)
 
 
-def write_run_key(name: str, command: str) -> None:
-    """Create or update an autostart entry (used from Phase 4 on)."""
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH) as key:
+def write_run_key(name: str, command: str, root: RegistryRoot | None = None) -> None:
+    """Create or update an autostart entry."""
+    hive, subkey = root or DEFAULT_RUN_ROOT
+    with winreg.CreateKey(hive, subkey) as key:
         winreg.SetValueEx(key, name, 0, winreg.REG_SZ, command)
 
 
-def delete_run_key(name: str) -> None:
+def delete_run_key(name: str, root: RegistryRoot | None = None) -> None:
     """Remove an autostart entry; a missing entry is not an error."""
+    hive, subkey = root or DEFAULT_RUN_ROOT
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH, 0, winreg.KEY_SET_VALUE) as key:
+        with winreg.OpenKey(hive, subkey, 0, winreg.KEY_SET_VALUE) as key:
             winreg.DeleteValue(key, name)
     except FileNotFoundError:
         return
+
+
+# --------------------------------------------------------------------------- #
+# Autostart of the manager itself (PLAN.md section 6.5)
+# --------------------------------------------------------------------------- #
+
+
+def manager_autostart_command(exe_cmd: str | None = None) -> str:
+    """The command the manager registers for its own autostart.
+
+    Frozen (PyInstaller) the answer is ``"<exe>" tray``; from a source
+    checkout it is ``"<python>" -m usage_monitor_manager tray``, which makes
+    the toggle usable during development too. ``exe_cmd`` overrides everything
+    (the UI passes it when it knows better, tests pass a fake path).
+
+    PLAN.md section 6.5 writes this command as ``"<exe>" --tray``; the CLI that
+    actually exists uses the ``tray`` subcommand, and accepts ``--tray`` as an
+    alias so a value written by hand in the PLAN's form still starts the tray.
+    """
+    if exe_cmd:
+        return exe_cmd
+    if getattr(sys, "frozen", False):
+        return f'"{Path(sys.executable).resolve()}" tray'
+    return f'"{Path(sys.executable).resolve()}" -m usage_monitor_manager tray'
+
+
+def get_manager_autostart(root: RegistryRoot | None = None) -> str | None:
+    """The manager's autostart command, or ``None`` when autostart is off."""
+    return read_run_key(MANAGER_RUN_NAME, root)
+
+
+def set_manager_autostart(
+    enabled: bool,
+    exe_cmd: str | None = None,
+    root: RegistryRoot | None = None,
+) -> str | None:
+    """Turn the manager's own autostart on or off; returns the stored command.
+
+    Raises:
+        OSError: when the registry refuses the write. The caller reports it: an
+            autostart toggle is never worth crashing the tray for.
+    """
+    if not enabled:
+        delete_run_key(MANAGER_RUN_NAME, root)
+        return None
+    command = manager_autostart_command(exe_cmd)
+    write_run_key(MANAGER_RUN_NAME, command, root)
+    return command
+
+
+def sync_manager_autostart_path(
+    exe_cmd: str | None = None,
+    root: RegistryRoot | None = None,
+) -> str | None:
+    """Rewrite the autostart command when the executable has moved.
+
+    The manager lives in OneDrive, which is free to relocate the folder; the
+    monitors solve this with their own ``sync_autostart_path`` and so do we.
+    Does nothing when autostart is off (it never *enables* it) and nothing when
+    the stored command already matches. Returns the command in force, or
+    ``None`` when autostart is off.
+    """
+    current = get_manager_autostart(root)
+    if current is None:
+        return None
+    wanted = manager_autostart_command(exe_cmd)
+    if current.strip().casefold() == wanted.strip().casefold():
+        return current
+    try:
+        write_run_key(MANAGER_RUN_NAME, wanted, root)
+    except OSError:
+        return current
+    return wanted
 
 
 def _split_arguments(rest: str) -> list[str]:
@@ -340,6 +439,53 @@ _kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCW
 _kernel32.CreateMutexW.restype = wintypes.HANDLE
 _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 _kernel32.CloseHandle.restype = wintypes.BOOL
+
+
+class MutexHolder:
+    """A named Win32 mutex kept alive for the lifetime of this process.
+
+    :func:`mutex_is_held` deliberately closes the handle it creates, so that it
+    can probe the monitors' singletons without becoming one. The manager's
+    *own* singleton needs the opposite: create the mutex and hold the handle
+    until the process exits, so a second manager sees ``ERROR_ALREADY_EXISTS``.
+    Usable as a context manager.
+    """
+
+    def __init__(self, name: str, handle: int) -> None:
+        self.name = name
+        self._handle: int | None = handle
+
+    def release(self) -> None:
+        """Close the handle; releasing twice is harmless."""
+        if self._handle is not None:
+            _kernel32.CloseHandle(self._handle)
+            self._handle = None
+
+    def __enter__(self) -> MutexHolder:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.release()
+
+
+def hold_mutex(name: str) -> MutexHolder | None:
+    """Acquire a named mutex and keep it; ``None`` when somebody already has it.
+
+    This is the manager's single-instance guard
+    (``UsageMonitorManager_SingleInstance``). The returned holder must stay
+    referenced for as long as the process should stay unique.
+    """
+    if not name:
+        return None
+    ctypes.set_last_error(0)
+    handle = _kernel32.CreateMutexW(None, False, name)
+    error = ctypes.get_last_error()
+    if not handle:
+        return None
+    if error == ERROR_ALREADY_EXISTS:
+        _kernel32.CloseHandle(handle)
+        return None
+    return MutexHolder(name, handle)
 
 
 def mutex_is_held(name: str) -> bool:

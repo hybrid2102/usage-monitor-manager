@@ -31,7 +31,7 @@ from typing import Any, cast
 
 import psutil
 
-from . import kinds, platform, versions
+from . import kinds, manager_config, platform, versions
 from .identity import config_dir_suffix, normalize_config_dir, parse_config_dir
 from .model import ConfigDirSource, Instance, MonitorKind, ProcessPair
 
@@ -52,6 +52,8 @@ SOURCE_PROCESS = "process"
 SOURCE_RUN_KEY = "run_key"
 SOURCE_SHORTCUT = "shortcut"
 SOURCE_SETTINGS_FILE = "settings_file"
+SOURCE_DECLARED = "declared"
+"""Source (d) of PLAN.md section 6.1: instances declared in ``manager-config.json``."""
 
 
 def _normcase(path: Path | str) -> str:
@@ -252,6 +254,7 @@ class _Draft:
     launch_args: tuple[str, ...] = ()
     launch_env: dict[str, str] = field(default_factory=lambda: {})
     autostart_command: str | None = None
+    label: str | None = None
     processes: ProcessPair | None = None
 
     @property
@@ -272,6 +275,7 @@ def _merge(drafts: dict[tuple[str, str], _Draft], incoming: _Draft) -> None:
 
     for source in incoming.sources:
         existing.add_source(source)
+    existing.label = existing.label or incoming.label
     if existing.processes is None and incoming.processes is not None:
         # The running view is authoritative for everything it knows.
         existing.processes = incoming.processes
@@ -418,6 +422,38 @@ def _drafts_from_settings_files(exe_by_kind: Mapping[str, Path]) -> list[_Draft]
     return drafts
 
 
+def _drafts_from_declared(
+    declared: Sequence[manager_config.DeclaredInstance],
+    exe_by_kind: Mapping[str, Path],
+) -> list[_Draft]:
+    """Source (d): the instances the user declared in ``manager-config.json``.
+
+    Disabled entries are skipped entirely (the user asked not to see them).
+    An unknown ``kind`` string is ignored rather than fatal: the file is
+    hand-editable and may come from a newer manager with more kinds.
+    """
+    drafts: list[_Draft] = []
+    for entry in declared:
+        if not entry.enabled:
+            continue
+        kind = kinds.KINDS.get(entry.kind.casefold())
+        if kind is None:
+            continue
+        is_default = _normcase(entry.config_dir) == _normcase(kind.default_config_dir)
+        source: ConfigDirSource = "default" if is_default else "cmdline"
+        drafts.append(
+            _Draft(
+                kind=kind,
+                config_dir=entry.config_dir,
+                config_dir_source=source,
+                sources=[SOURCE_DECLARED],
+                exe_path=exe_by_kind.get(kind.key),
+                label=entry.label,
+            )
+        )
+    return drafts
+
+
 # --------------------------------------------------------------------------- #
 # Public entry point
 # --------------------------------------------------------------------------- #
@@ -473,20 +509,34 @@ def _finalize(draft: _Draft, run_entries: Mapping[str, str]) -> Instance:
         autostart_command=autostart_command,
         launch_args=draft.launch_args,
         launch_env=dict(draft.launch_env),
+        label=draft.label,
         sources=tuple(draft.sources),
         config_dir_source=draft.config_dir_source,
         processes=draft.processes,
     )
 
 
-def discover(include_dormant: bool = True) -> list[Instance]:
+def discover(
+    include_dormant: bool = True,
+    *,
+    declared: Sequence[manager_config.DeclaredInstance] | None = None,
+) -> list[Instance]:
     """Every instance of the family, running first, then the dormant ones.
 
     The result is sorted by kind (registry order) and then by config dir, and is
     fully serializable through :meth:`Instance.to_dict`. Merge key is
     ``(kind, normcase(config dir))``: the same instance seen as a process, a Run
-    key and a settings file appears once, with all three sources listed.
+    key and a settings file appears once, with all four sources listed.
+
+    ``declared`` is source (d) of PLAN.md section 6.1, the instances the user
+    declared in ``manager-config.json``: it is also where the user-visible
+    ``label`` comes from, which is why it is merged even when
+    ``include_dormant`` is false - in that case only the label of an
+    already-known instance is taken, no dormant entry is added.
+    Passing the sequence explicitly keeps the manager config out of the tests;
+    ``None`` means "read the real file".
     """
+    entries = manager_config.load().instances if declared is None else declared
     resolve_kind = _KindResolver()
     run_entries = platform.read_run_entries()
 
@@ -507,6 +557,14 @@ def discover(include_dormant: bool = True) -> list[Instance]:
             if draft.exe_path is not None:
                 exe_by_kind.setdefault(draft.kind.key, draft.exe_path)
         for draft in _drafts_from_settings_files(exe_by_kind):
+            _merge(drafts, draft)
+
+    exe_by_kind_all: dict[str, Path] = {}
+    for draft in drafts.values():
+        if draft.exe_path is not None:
+            exe_by_kind_all.setdefault(draft.kind.key, draft.exe_path)
+    for draft in _drafts_from_declared(entries, exe_by_kind_all):
+        if include_dormant or draft.key in drafts:
             _merge(drafts, draft)
 
     order = {kind.key: index for index, kind in enumerate(kinds.all_kinds())}
