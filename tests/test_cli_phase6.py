@@ -24,6 +24,9 @@ from usage_monitor_manager.self_update import MANAGER_REPO, SelfUpdateCheck
 from usage_monitor_manager.updater import UpdateResult
 from usage_monitor_manager.versions import VersionStatus
 
+pytestmark = pytest.mark.usefixtures("english_cli")
+"""Every test in this module asserts the English wording of the CLI."""
+
 COPILOT_EXE = r"D:\Tools\UsageMonitorForCopilot.exe"
 
 
@@ -434,6 +437,7 @@ def test_status_json_is_offline_by_default(capsys: pytest.CaptureFixture[str], m
 def test_status_with_check_asks_github(
     capsys: pytest.CaptureFixture[str], plans: list[UpdatePlan], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+
     monkeypatch.setattr(
         self_update,
         "check_self",

@@ -30,6 +30,9 @@ from usage_monitor_manager.kinds import get_kind
 from usage_monitor_manager.manager_config import DeclaredInstance
 from usage_monitor_manager.model import Instance, ProcessPair
 
+pytestmark = pytest.mark.usefixtures("english_cli")
+"""Every test in this module asserts the English wording of the CLI."""
+
 CLAUDE_EXE = r"D:\Tools\UsageMonitorForClaude.exe"
 CODEX_EXE = r"D:\Tools\UsageMonitorForCodex.exe"
 
@@ -475,7 +478,7 @@ def test_import_legacy_dry_run_prints_the_report(
     assert main(["import-legacy", "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert captured == {"dry_run": True}
-    assert "nessuna modifica verra' scritta" in out
+    assert "nothing will be written" in out
     assert "[shortcut] Claude Valeria" in out
     assert "da aggiungere: 1" in out
 
@@ -495,7 +498,7 @@ def test_autostart_manager_status(capsys: pytest.CaptureFixture[str], monkeypatc
 
     monkeypatch.setattr(platform_module, "get_manager_autostart", lambda root=None: None)
     assert main(["autostart", "--manager"]) == 0
-    assert "avvio con Windows: no" in capsys.readouterr().out
+    assert "starts with Windows: no" in capsys.readouterr().out
 
 
 def test_autostart_manager_on_and_off(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -511,8 +514,8 @@ def test_autostart_manager_on_and_off(capsys: pytest.CaptureFixture[str], monkey
     assert main(["autostart", "--manager", "off"]) == 0
     assert written == [True, False]
     out = capsys.readouterr().out
-    assert 'avvio con Windows: si ("x" tray)' in out
-    assert "avvio con Windows: no" in out
+    assert 'starts with Windows: yes ("x" tray)' in out
+    assert "starts with Windows: no" in out
 
 
 def test_autostart_manager_json(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -542,6 +545,7 @@ def test_autostart_instance(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+
     from usage_monitor_manager import process_control
 
     _discovery(monkeypatch, _instances())
@@ -553,7 +557,7 @@ def test_autostart_instance(
     )
     assert main(["autostart", "--instance", "claude", "on"]) == 0
     assert calls == [("claude", True)]
-    assert 'claude: avvio con Windows: si ("x")' in capsys.readouterr().out
+    assert 'claude: starts with Windows: yes ("x")' in capsys.readouterr().out
 
 
 def test_autostart_instance_status(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -562,13 +566,13 @@ def test_autostart_instance_status(capsys: pytest.CaptureFixture[str], monkeypat
     _discovery(monkeypatch, _instances())
     monkeypatch.setattr(process_control, "get_instance_autostart", lambda instance, root=None: None)
     assert main(["autostart", "--instance", "claude"]) == 0
-    assert "avvio con Windows: no" in capsys.readouterr().out
+    assert "starts with Windows: no" in capsys.readouterr().out
 
 
 def test_autostart_unknown_instance(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     _discovery(monkeypatch, _instances())
     assert main(["autostart", "--instance", "ghost", "on"]) == EXIT_NO_MATCH
-    assert "nessuna istanza" in capsys.readouterr().err
+    assert "no instance with id 'ghost'" in capsys.readouterr().err
 
 
 def test_autostart_requires_a_target() -> None:

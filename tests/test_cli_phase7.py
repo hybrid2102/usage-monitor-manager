@@ -21,6 +21,9 @@ from usage_monitor_manager.cli import EXIT_FAILED, EXIT_NO_MATCH, main
 from usage_monitor_manager.kinds import get_kind
 from usage_monitor_manager.model import Instance, ProcessPair
 
+pytestmark = pytest.mark.usefixtures("english_cli")
+"""Every test in this module asserts the English wording of the CLI."""
+
 TOOLS = Path(r"D:\Tools")
 
 
@@ -461,6 +464,7 @@ def test_status_write_file_with_json_says_where_it_wrote_on_stderr(
 def test_a_status_file_that_cannot_be_written_fails_loudly(
     capsys: pytest.CaptureFixture[str], machine: list[Instance], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+
     def refuse(*_: object, **__: object) -> Path:
         raise OSError("access is denied")
 

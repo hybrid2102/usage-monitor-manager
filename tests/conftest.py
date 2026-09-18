@@ -75,3 +75,24 @@ def pristine_kind_registry() -> Any:
     finally:
         kinds.KINDS.clear()
         kinds.KINDS.update(saved)
+
+
+@pytest.fixture
+def english_cli(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Run the CLI against the English catalog.
+
+    ``main()`` activates ``preferences.language`` before it prints anything,
+    which for these tests would mean the Italian default. The CLI test modules
+    assert the English wording (it is the one a script or a CI log shows), so
+    they pin the language here and neutralize that call; the Italian catalog is
+    covered by the parity and key-scan tests of ``test_i18n.py``, and by the
+    tests that read the Italian messages on purpose (``test_cli_config.py``).
+    """
+    from usage_monitor_manager import i18n
+
+    i18n.set_language("en")
+    monkeypatch.setattr(i18n, "set_language", lambda _preference: i18n.language())
+    try:
+        yield
+    finally:
+        i18n.reset()

@@ -21,6 +21,9 @@ from usage_monitor_manager.kinds import get_kind
 from usage_monitor_manager.model import Instance, ProcessPair, ReleaseAsset, ReleaseInfo, UpdatePlan
 from usage_monitor_manager.updater import UpdateEvent, UpdateResult
 
+pytestmark = pytest.mark.usefixtures("english_cli")
+"""Every test in this module asserts the English wording of the CLI."""
+
 COPILOT_EXE = r"D:\Tools\UsageMonitorForCopilot.exe"
 
 CHANGELOG = """### Fixed
@@ -372,6 +375,7 @@ def test_rollback_reports_a_failure(monkeypatch: pytest.MonkeyPatch, capsys: pyt
 def test_rollback_without_a_matching_instance_exits_three(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+
     _freeze(monkeypatch, instances=[])
     assert main(["rollback", "--kind", "codex"]) == EXIT_NO_MATCH
     assert "no Codex executable" in capsys.readouterr().err

@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import __version__
+from .i18n import T, t
 from .identity import normalize_config_dir
 from .model import Instance, JsonDict, UpdatePlan
 from .versions import display_version
@@ -139,128 +140,128 @@ def _add_selection(parser: argparse.ArgumentParser) -> None:
     ``--config-dir`` are repeatable, so ``--kind copilot --kind codex`` and
     ``--config-dir A --config-dir B`` both work.
     """
-    parser.add_argument("--all", action="store_true", help="act on every known instance")
+    parser.add_argument("--all", action="store_true", help=T["cli.help.select_all"])
     parser.add_argument(
         "--kind",
         action="append",
         choices=_kind_choices(),
         metavar="KEY",
-        help="act on every instance of this kind (repeatable)",
+        help=T["cli.help.select_kind"],
     )
     parser.add_argument(
         "--config-dir",
         action="append",
         metavar="PATH",
-        help="act on the instance using this config dir (repeatable)",
+        help=T["cli.help.select_config_dir"],
     )
-    parser.add_argument("--id", dest="instance_id", metavar="KIND:SUFFIX", help="act on the instance with this id")
-    parser.add_argument("--dry-run", action="store_true", help="print what would happen, change nothing")
+    parser.add_argument("--id", dest="instance_id", metavar="KIND:SUFFIX", help=T["cli.help.select_id"])
+    parser.add_argument("--dry-run", action="store_true", help=T["cli.help.dry_run"])
 
 
 def _add_json(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--json", action="store_true", help="machine readable output")
+    parser.add_argument("--json", action="store_true", help=T["cli.help.json"])
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the full ``umm`` argument parser."""
-    parser = argparse.ArgumentParser(prog="umm", description="Usage Monitor Manager")
+    parser = argparse.ArgumentParser(prog="umm", description=T["app.name"])
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument(
         "--post-update",
         metavar="PID",
         type=int,
-        help="internal: wait for PID to exit, drop the .bak, then run the tray (see self_update.py)",
+        help=T["cli.help.post_update"],
     )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    listing = subparsers.add_parser("list", help="list discovered instances")
+    listing = subparsers.add_parser("list", help=T["cli.help.cmd_list"])
     _add_json(listing)
 
     for name, help_text in (
-        ("restart", "restart instances"),
-        ("stop", "stop instances"),
-        ("start", "start instances"),
+        ("restart", T["cli.help.cmd_restart"]),
+        ("stop", T["cli.help.cmd_stop"]),
+        ("start", T["cli.help.cmd_start"]),
     ):
         sub = subparsers.add_parser(name, help=help_text)
         _add_selection(sub)
         _add_json(sub)
 
-    check = subparsers.add_parser("check", help="check GitHub for monitor updates")
+    check = subparsers.add_parser("check", help=T["cli.help.cmd_check"])
     check.add_argument(
         "--kind",
         action="append",
         choices=_kind_choices(),
         metavar="KEY",
-        help="limit the check to this kind (repeatable)",
+        help=T["cli.help.check_kind"],
     )
-    check.add_argument("--changelog", action="store_true", help="also print the release notes")
-    check.add_argument("--prerelease", action="store_true", help="consider prereleases too")
+    check.add_argument("--changelog", action="store_true", help=T["cli.help.changelog"])
+    check.add_argument("--prerelease", action="store_true", help=T["cli.help.prerelease"])
     check.add_argument(
         "--include-skipped",
         action="store_true",
-        help="report a release the user skipped as available instead of 'skipped'",
+        help=T["cli.help.include_skipped"],
     )
     _add_json(check)
 
-    update = subparsers.add_parser("update", help="download and apply a monitor update")
+    update = subparsers.add_parser("update", help=T["cli.help.cmd_update"])
     update.add_argument(
         "--kind",
         action="append",
         choices=_kind_choices(),
         metavar="KEY",
-        help="update this kind (repeatable)",
+        help=T["cli.help.update_kind"],
     )
-    update.add_argument("--all", action="store_true", help="update every outdated executable")
-    update.add_argument("--yes", action="store_true", help="do not ask for confirmation")
-    update.add_argument("--no-restart", action="store_true", help="do not restart the instances")
-    update.add_argument("--dry-run", action="store_true", help="print every step, change nothing")
-    update.add_argument("--prerelease", action="store_true", help="consider prereleases too")
+    update.add_argument("--all", action="store_true", help=T["cli.help.update_all"])
+    update.add_argument("--yes", action="store_true", help=T["cli.help.yes"])
+    update.add_argument("--no-restart", action="store_true", help=T["cli.help.no_restart"])
+    update.add_argument("--dry-run", action="store_true", help=T["cli.help.dry_run_steps"])
+    update.add_argument("--prerelease", action="store_true", help=T["cli.help.prerelease"])
     update.add_argument(
         "--include-skipped",
         action="store_true",
-        help="update even a release the user chose to skip",
+        help=T["cli.help.update_skipped"],
     )
     update.add_argument(
         "--allow-unverified",
         action="store_true",
-        help="with --yes, install an asset GitHub publishes no sha256 for (default: skip it, exit 4)",
+        help=T["cli.help.allow_unverified"],
     )
-    update.add_argument("--log", metavar="FILE", help="append one JSON object per step to FILE")
+    update.add_argument("--log", metavar="FILE", help=T["cli.help.log_file"])
     _add_json(update)
 
-    rollback = subparsers.add_parser("rollback", help="restore the previous executable from its .bak")
+    rollback = subparsers.add_parser("rollback", help=T["cli.help.cmd_rollback"])
     rollback.add_argument(
         "--kind",
         action="append",
         choices=_kind_choices(),
         metavar="KEY",
         required=True,
-        help="roll back this kind's executable (repeatable)",
+        help=T["cli.help.rollback_kind"],
     )
     rollback.add_argument(
         "--version",
         dest="target_version",
         metavar="V",
-        help="restore this archived version (default: the previous executable)",
+        help=T["cli.help.rollback_version"],
     )
-    rollback.add_argument("--no-restart", action="store_true", help="do not restart the instances")
+    rollback.add_argument("--no-restart", action="store_true", help=T["cli.help.no_restart"])
     _add_json(rollback)
 
-    archive = subparsers.add_parser("archive", help="inspect or prune the kept executables (.umm-archive)")
+    archive = subparsers.add_parser("archive", help=T["cli.help.cmd_archive"])
     archive.add_argument("action", choices=_ARCHIVE_ACTIONS)
     archive.add_argument(
         "--kind",
         action="append",
         choices=_kind_choices(),
         metavar="KEY",
-        help="limit to this kind (repeatable)",
+        help=T["cli.help.limit_kind"],
     )
-    archive.add_argument("--keep", type=int, metavar="N", help="for prune: how many to keep (default: preference)")
+    archive.add_argument("--keep", type=int, metavar="N", help=T["cli.help.archive_keep"])
     _add_json(archive)
 
     for name, help_text in (
-        ("skip", "never offer the latest release of a kind again"),
-        ("unskip", "offer the skipped release again"),
+        ("skip", T["cli.help.cmd_skip"]),
+        ("unskip", T["cli.help.cmd_unskip"]),
     ):
         skip = subparsers.add_parser(name, help=help_text)
         skip.add_argument(
@@ -269,105 +270,105 @@ def build_parser() -> argparse.ArgumentParser:
             choices=_skip_choices(),
             metavar="KEY",
             required=True,
-            help="a kind key or 'manager' (repeatable)",
+            help=T["cli.help.kind_or_manager"],
         )
         _add_json(skip)
 
-    token = subparsers.add_parser("token", help="manage the GitHub token in the Windows Credential Manager")
+    token = subparsers.add_parser("token", help=T["cli.help.cmd_token"])
     token.add_argument("action", choices=_TOKEN_ACTIONS)
     token.add_argument(
         "--from-env",
         metavar="VAR",
-        help="for set: read the token from this environment variable instead of stdin",
+        help=T["cli.help.token_from_env"],
     )
     _add_json(token)
 
-    config = subparsers.add_parser("config", help="inspect or edit instance settings")
+    config = subparsers.add_parser("config", help=T["cli.help.cmd_config"])
     config.add_argument("action", choices=CONFIG_ACTIONS)
     config.add_argument(
         "args",
         nargs="*",
         metavar="ARG",
-        help="KEY [VALUE] for set/unset, DEST for export, SRC for import, N for diff/restore",
+        help=T["cli.help.config_args"],
     )
-    config.add_argument("--instance", metavar="ID", help="target instance id (see 'umm list')")
+    config.add_argument("--instance", metavar="ID", help=T["cli.help.target_instance"])
     _add_json(config)
 
-    self_update = subparsers.add_parser("self-update", help="update the manager itself")
-    self_update.add_argument("--check-only", action="store_true", help="only report availability")
-    self_update.add_argument("--yes", action="store_true", help="do not ask for confirmation")
-    self_update.add_argument("--dry-run", action="store_true", help="print every step, change nothing")
-    self_update.add_argument("--prerelease", action="store_true", help="consider prereleases too")
+    self_update = subparsers.add_parser("self-update", help=T["cli.help.cmd_self_update"])
+    self_update.add_argument("--check-only", action="store_true", help=T["cli.help.check_only"])
+    self_update.add_argument("--yes", action="store_true", help=T["cli.help.yes"])
+    self_update.add_argument("--dry-run", action="store_true", help=T["cli.help.dry_run_steps"])
+    self_update.add_argument("--prerelease", action="store_true", help=T["cli.help.prerelease"])
     _add_json(self_update)
 
-    status = subparsers.add_parser("status", help="health summary for scripts and statuslines")
-    status.add_argument("--check", action="store_true", help="also ask GitHub (the default is offline)")
+    status = subparsers.add_parser("status", help=T["cli.help.cmd_status"])
+    status.add_argument("--check", action="store_true", help=T["cli.help.status_check"])
     status.add_argument(
         "--write-file",
         nargs="?",
         const="",
         metavar="PATH",
         dest="write_file",
-        help="also write the JSON document to PATH (default: %%LOCALAPPDATA%%\\UsageMonitorManager\\status.json)",
+        help=T["cli.help.write_file"],
     )
     _add_json(status)
 
-    kind = subparsers.add_parser("kind", help="inspect or edit the kind registry (PLAN.md section 9.9)")
+    kind = subparsers.add_parser("kind", help=T["cli.help.cmd_kind"])
     kind.add_argument("action", choices=_KIND_ACTIONS)
-    kind.add_argument("key", nargs="?", metavar="KEY", help="for add/remove: the kind key")
-    kind.add_argument("--display-name", metavar="NAME", help="for add: the label shown in the UI")
-    kind.add_argument("--exe-name", metavar="FILE", help="for add: the executable file name (no path)")
-    kind.add_argument("--repo", metavar="OWNER/NAME", help="for add: the GitHub repository publishing the releases")
-    kind.add_argument("--asset-pattern", metavar="NAME", help="for add: the release asset (default: the exe name)")
-    kind.add_argument("--sha-sidecar", action="store_true", help="for add: the release publishes a .sha256 sidecar")
-    kind.add_argument("--pe-product-name", metavar="NAME", help="for add: the PE ProductName to double-check against")
+    kind.add_argument("key", nargs="?", metavar="KEY", help=T["cli.help.kind_key"])
+    kind.add_argument("--display-name", metavar="NAME", help=T["cli.help.kind_display"])
+    kind.add_argument("--exe-name", metavar="FILE", help=T["cli.help.kind_exe"])
+    kind.add_argument("--repo", metavar="OWNER/NAME", help=T["cli.help.kind_repo"])
+    kind.add_argument("--asset-pattern", metavar="NAME", help=T["cli.help.kind_asset"])
+    kind.add_argument("--sha-sidecar", action="store_true", help=T["cli.help.kind_sidecar"])
+    kind.add_argument("--pe-product-name", metavar="NAME", help=T["cli.help.kind_product"])
     _add_json(kind)
 
-    diag = subparsers.add_parser("diag", help="run one instance with --verbose and capture its output")
+    diag = subparsers.add_parser("diag", help=T["cli.help.cmd_diag"])
     diag.add_argument("action", choices=_DIAG_ACTIONS)
-    diag.add_argument("--instance", metavar="ID", help="instance id (see 'umm list')")
-    diag.add_argument("--lines", type=int, default=200, metavar="N", help="for show: how many log lines (default 200)")
-    diag.add_argument("--dry-run", action="store_true", help="print what would happen, change nothing")
+    diag.add_argument("--instance", metavar="ID", help=T["cli.help.instance_id"])
+    diag.add_argument("--lines", type=int, default=200, metavar="N", help=T["cli.help.diag_lines"])
+    diag.add_argument("--dry-run", action="store_true", help=T["cli.help.dry_run"])
     _add_json(diag)
 
-    profile = subparsers.add_parser("profile", help="named sets of instances (PLAN.md section 9.13)")
+    profile = subparsers.add_parser("profile", help=T["cli.help.cmd_profile"])
     profile.add_argument("action", choices=_PROFILE_ACTIONS)
-    profile.add_argument("name", nargs="?", metavar="NAME", help="the profile name")
+    profile.add_argument("name", nargs="?", metavar="NAME", help=T["cli.help.profile_name"])
     profile.add_argument(
         "--instance",
         action="append",
         dest="instance_ids",
         metavar="ID",
-        help="for add: an instance id of the profile (repeatable)",
+        help=T["cli.help.profile_instance"],
     )
-    profile.add_argument("--yes", action="store_true", help="for apply: do not ask for confirmation")
-    profile.add_argument("--dry-run", action="store_true", help="for apply: print the plan, change nothing")
+    profile.add_argument("--yes", action="store_true", help=T["cli.help.profile_yes"])
+    profile.add_argument("--dry-run", action="store_true", help=T["cli.help.profile_dry_run"])
     profile.add_argument(
         "--no-stop-others",
         action="store_true",
-        help="for apply: only start the profile's instances, stop nothing",
+        help=T["cli.help.profile_no_stop"],
     )
     _add_json(profile)
 
-    subparsers.add_parser("tray", help="run the tray icon (the default when started with no arguments)")
+    subparsers.add_parser("tray", help=T["cli.help.cmd_tray"])
 
     import_legacy = subparsers.add_parser(
         "import-legacy",
-        help="import shortcuts, Run entries and the old config editor's profiles",
+        help=T["cli.help.cmd_import_legacy"],
     )
-    import_legacy.add_argument("--dry-run", action="store_true", help="print what would be imported, change nothing")
+    import_legacy.add_argument("--dry-run", action="store_true", help=T["cli.help.dry_run_import"])
     _add_json(import_legacy)
 
-    autostart = subparsers.add_parser("autostart", help="inspect or change autostart with Windows")
+    autostart = subparsers.add_parser("autostart", help=T["cli.help.cmd_autostart"])
     target = autostart.add_mutually_exclusive_group(required=True)
     target.add_argument("--manager", nargs="?", const="status", choices=_AUTOSTART_ACTIONS, metavar="ACTION")
-    target.add_argument("--instance", metavar="ID", help="instance id (see 'umm list')")
+    target.add_argument("--instance", metavar="ID", help=T["cli.help.instance_id"])
     autostart.add_argument(
         "action",
         nargs="?",
         choices=_AUTOSTART_ACTIONS,
         default="status",
-        help="on | off | status (default: status)",
+        help=T["cli.help.autostart_action"],
     )
     _add_json(autostart)
 
@@ -594,7 +595,7 @@ def _cmd_process(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
 
     command = str(args.command)
     if not _has_selector(args):
-        parser.error(f"{command}: pick at least one of --all, --kind, --config-dir, --id")
+        parser.error(t("cli.pick_a_selector", command=command))
 
     targets = select_instances(
         discover(),
@@ -604,7 +605,7 @@ def _cmd_process(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
         instance_id=args.instance_id,
     )
     if not targets:
-        print("no instance matched the given selectors")
+        print(T["cli.no_match"])
         return EXIT_NO_MATCH
 
     if args.dry_run:
@@ -679,7 +680,14 @@ def render_changelog(body: str) -> list[str]:
 
 def _print_changelog(plan: UpdatePlan) -> None:
     print("")
-    print(f"What's new in {plan.kind.display_name} {plan.target.tag}  ({plan.target.html_url})")
+    print(
+        t(
+            "cli.whats_new",
+            name=plan.kind.display_name,
+            tag=plan.target.tag,
+            url=plan.target.html_url,
+        )
+    )
     for line in render_changelog(plan.target.body_markdown):
         print(line)
     print("")
@@ -762,7 +770,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
     try:
         plans = build_plans(args.kind, prerelease=bool(args.prerelease))
     except GitHubError as error:
-        print(f"umm check: {error}", file=sys.stderr)
+        print(t("cli.check_error", error=error), file=sys.stderr)
         return EXIT_NETWORK
 
     skipped = [] if args.include_skipped else skipped_plans(plans)
@@ -801,13 +809,13 @@ class _ProgressPrinter:
         if event.step == "download" and event.progress is not None:
             percent = round(event.progress * 100)
             if self.tty:
-                print(f"\r  downloading {percent:3d}%", end="", flush=True)
+                print("\r" + t("cli.downloading", percent=percent), end="", flush=True)
                 self._active = True
                 return
             if percent < 100 and percent - self._last < 25:
                 return
             self._last = percent
-            print(f"  downloading {percent:3d}%")
+            print(t("cli.downloading", percent=percent))
             return
         if self._active:
             print("")
@@ -840,7 +848,7 @@ class _StepLog:
                 handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except OSError as error:
             self._failed = True
-            print(f"umm: cannot write the log {self.path}: {error}", file=sys.stderr)
+            print(t("cli.log_not_written", path=self.path, error=error), file=sys.stderr)
 
     def event(self, plan: UpdatePlan, event: UpdateEvent) -> None:
         self.write(
@@ -869,12 +877,12 @@ def _cmd_update(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
     from .versions import VersionStatus
 
     if not args.kind and not args.all:
-        parser.error("update: pick --kind KEY or --all")
+        parser.error(T["cli.update_pick_kind"])
 
     try:
         plans = build_plans(args.kind, prerelease=bool(args.prerelease))
     except GitHubError as error:
-        print(f"umm update: {error}", file=sys.stderr)
+        print(t("cli.update_error", error=error), file=sys.stderr)
         return EXIT_NETWORK
 
     outdated = [p for p in plans if plan_status(p) is VersionStatus.UPDATE_AVAILABLE]
@@ -914,7 +922,7 @@ def _cmd_update(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
         if not args.json:
             _print_changelog(plan)  # printed before the download, as the old updater did
         if not args.yes and not _confirm(f"update {plan.kind.display_name} to {plan.target.version}?"):
-            print("skipped")
+            print(T["cli.skipped"])
             continue
         printer = _ProgressPrinter(tty=tty) if not args.json else None
 
@@ -1004,7 +1012,7 @@ def _cmd_rollback(args: argparse.Namespace) -> int:
         kind = get_kind(key)
         exe_paths = _exe_paths_for_kind(instances, kind.key)
         if not exe_paths:
-            print(f"no {kind.display_name} executable found", file=sys.stderr)
+            print(t("cli.no_executable_for", name=kind.display_name), file=sys.stderr)
             continue
         matched = True
         for exe_path in exe_paths:
@@ -1114,7 +1122,7 @@ def _cmd_archive(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps({"action": "prune", "keep": keep, "removed": removed}, indent=2))
     else:
-        print(f"kept the {keep} newest build(s) per executable; removed {len(removed)}")
+        print(t("cli.pruned", keep=keep, removed=len(removed)))
         for entry in removed:
             print(f"  {entry['kind']} {entry['version']} ({entry['file']})")
     return EXIT_OK
@@ -1151,23 +1159,23 @@ def _cmd_skip(args: argparse.Namespace, *, skip: bool) -> int:
             manager_config.unskip_version(repo)
             rows.append({"kind": key, "repo": repo, "skipped": None})
             if not args.json:
-                print(f"{key}: the skipped release is offered again")
+                print(t("cli.unskipped", kind=key))
             continue
         try:
             repo, tag, label = _repo_and_tag(key, prerelease=False)
         except GitHubError as error:
-            print(f"umm skip: {error}", file=sys.stderr)
+            print(t("cli.skip_error", error=error), file=sys.stderr)
             return EXIT_NETWORK
         if not tag:
             failed = True
             rows.append({"kind": key, "repo": repo, "skipped": None, "detail": "no published release"})
             if not args.json:
-                print(f"{key}: no published release to skip", file=sys.stderr)
+                print(t("cli.nothing_to_skip", kind=key), file=sys.stderr)
             continue
         manager_config.skip_version(repo, tag)
         rows.append({"kind": key, "repo": repo, "skipped": tag})
         if not args.json:
-            print(f"{label}: {tag} will not be offered again (umm unskip --kind {key} to undo)")
+            print(t("cli.skip_done", label=label, tag=tag, kind=key))
     if args.json:
         print(json.dumps(rows, indent=2))
     return EXIT_FAILED if failed else EXIT_OK
@@ -1190,7 +1198,7 @@ def _read_token_from_stdin() -> str:
     if sys.stdin is None:  # pragma: no cover - only without a stdin at all
         return ""
     if getattr(sys.stdin, "isatty", lambda: False)():
-        print("paste the GitHub token and press Enter (it is never printed back):")
+        print(T["cli.paste_token"])
     try:
         return sys.stdin.readline()
     except (OSError, ValueError):  # pragma: no cover - closed stdin
@@ -1212,8 +1220,14 @@ def _cmd_token(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(payload, indent=2))
         else:
-            print(f"token: {'present' if present else 'absent'} (source: {payload['source']})")
-            print(f"credential target: {secrets.DEFAULT_TARGET}")
+            print(
+                t(
+                    "cli.token_state",
+                    state=T["cli.token_present"] if present else T["cli.token_absent"],
+                    source=payload["source"],
+                )
+            )
+            print(t("cli.credential_target", target=secrets.DEFAULT_TARGET))
         return EXIT_OK
 
     if args.action == "clear":
@@ -1222,26 +1236,26 @@ def _cmd_token(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(payload, indent=2))
         else:
-            print("token removed from the Credential Manager" if removed else "no token was stored")
+            print(T["cli.token_removed"] if removed else T["cli.token_never_stored"])
         return EXIT_OK
 
     raw = os.environ.get(args.from_env, "") if args.from_env else _read_token_from_stdin()
     if args.from_env and not raw.strip():
-        print(f"umm token set: {args.from_env} is empty or not set", file=sys.stderr)
+        print(t("cli.token_env_empty", name=args.from_env), file=sys.stderr)
         return EXIT_FAILED
     try:
         secrets.set_token(raw)
     except ValueError:
-        print("umm token set: no token was given (stdin was empty)", file=sys.stderr)
+        print(T["cli.token_stdin_empty"], file=sys.stderr)
         return EXIT_FAILED
     except secrets.CredentialError as error:
-        print(f"umm token set: {error}", file=sys.stderr)
+        print(t("cli.token_set_error", error=error), file=sys.stderr)
         return EXIT_FAILED
     payload = {"present": True, "target": secrets.DEFAULT_TARGET, "source": "credential_manager"}
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
-        print(f"token stored in the Windows Credential Manager (target {secrets.DEFAULT_TARGET})")
+        print(t("cli.token_stored", target=secrets.DEFAULT_TARGET))
     return EXIT_OK
 
 
@@ -1285,7 +1299,7 @@ def _cmd_self_update(args: argparse.Namespace) -> int:
         return EXIT_FAILED
 
     if not args.yes and not _confirm(f"update the manager to {state.target_version}?"):
-        print("skipped")
+        print(T["cli.skipped"])
         return EXIT_OK
 
     printer = None if args.json else _ProgressPrinter(tty=bool(getattr(sys.stdout, "isatty", lambda: False)()))
@@ -1338,32 +1352,39 @@ def _cmd_status(args: argparse.Namespace) -> int:
         try:
             written = write_status_file(payload, write_file or None)
         except OSError as error:
-            print(f"status file not written: {error}")
+            print(t("cli.status_file_not_written", error=error))
             return EXIT_FAILED
     if args.json:
         print(json.dumps(payload, indent=2))
         if written is not None:
-            print(f"written to {written}", file=sys.stderr)
+            print(t("cli.written_to", path=written), file=sys.stderr)
         return EXIT_OK
     instances = payload["instances"]
-    print(f"Usage Monitor Manager {payload['version']} - {payload['running']}/{len(instances)} running")
+    print(
+        t(
+            "cli.status_header",
+            version=payload["version"],
+            running=payload["running"],
+            total=len(instances),
+        )
+    )
     for row in instances:
-        mark = "running" if row["is_running"] else "stopped"
+        mark = T["cli.status_running"] if row["is_running"] else T["cli.status_stopped"]
         print(f"  {row['id']:<24} {row['local_version'] or '?':<10} {mark}")
     updates = payload["updates"]
     if updates["checked"]:
-        suffix = f" (error: {updates['error']})" if updates["error"] else ""
-        print(f"updates available: {updates['available']}{suffix}")
+        suffix = t("cli.updates_error_suffix", error=updates["error"]) if updates["error"] else ""
+        print(t("cli.updates_available", count=updates["available"], suffix=suffix))
     else:
-        print("updates: not checked (use --check)")
+        print(T["cli.updates_not_checked"])
     findings = payload["watchdog"]
     if findings["count"]:
         for event in findings["events"]:
             print(f"  ! {event['type']}: {event['detail']}")
     else:
-        print("watchdog: nothing anomalous")
+        print(T["cli.watchdog_clean"])
     if written is not None:
-        print(f"status file: {written}")
+        print(t("cli.status_file_is", path=written))
     return EXIT_OK
 
 
@@ -1411,7 +1432,7 @@ def _cmd_kind(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
 
     key = (args.key or "").strip()
     if not key:
-        parser.error(f"umm kind {action} needs a KEY")
+        parser.error(t("cli.kind_needs_key", action=action))
 
     if action == "remove":
         removed = kind_registry.remove_custom_kind(key)
@@ -1419,13 +1440,13 @@ def _cmd_kind(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         if args.json:
             print(json.dumps(payload, indent=2))
         elif removed:
-            print(f"kind {key} removed")
+            print(t("cli.kind_removed", key=key))
         else:
-            print(f"no user-defined kind {key} (built-in kinds cannot be removed)")
+            print(t("cli.kind_not_custom", key=key))
         return EXIT_OK if removed else EXIT_NO_MATCH
 
     if not args.exe_name or not args.repo:
-        parser.error("umm kind add needs --exe-name and --repo")
+        parser.error(T["cli.kind_add_needs"])
     entry = manager_config.CustomKind(
         key=key.casefold(),
         display_name=(args.display_name or key).strip(),
@@ -1443,7 +1464,7 @@ def _cmd_kind(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         for problem in problems:
             print(f"! {problem}")
     else:
-        print(f"kind {entry.key} added ({entry.exe_name} from {entry.repo})")
+        print(t("cli.kind_added", key=entry.key, exe=entry.exe_name, repo=entry.repo))
     return EXIT_FAILED if problems else EXIT_OK
 
 
@@ -1483,18 +1504,18 @@ def _cmd_diag(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             print(json.dumps(payload, indent=2))
             return EXIT_OK
         if session is None:
-            print("no instance is running in diagnostic mode")
-            print(f"manager log: {diag.manager_log_path()}")
+            print(T["cli.diag_none"])
+            print(t("cli.manager_log_is", path=diag.manager_log_path()))
             return EXIT_OK
-        print(f"{session.instance_id} in diagnostic mode since {session.started_at or '?'}")
-        print(f"log: {session.log_path}")
+        print(t("cli.diag_since", instance=session.instance_id, since=session.started_at or "?"))
+        print(t("cli.log_is", path=session.log_path))
         for line in lines:
             print(line)
         return EXIT_OK
 
     instance = _diag_instance(args.instance)
     if instance is None:
-        print("no single instance selected: pass --instance ID (see 'umm list')")
+        print(T["cli.diag_no_selection"])
         return EXIT_NO_MATCH
 
     if action == "start":
@@ -1506,7 +1527,7 @@ def _cmd_diag(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     else:
         if args.dry_run:
             print(process_control_describe_stop(instance))
-            print("would start it again without --verbose")
+            print(T["cli.diag_would_restart"])
             return EXIT_OK
         result = diag.stop_diagnostics(instance, on_event=None if args.json else _process_event_printer)
 
@@ -1515,7 +1536,7 @@ def _cmd_diag(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     else:
         print(f"{result.instance_id}: {result.detail}")
         if result.log_path is not None and action == "start":
-            print(f"log: {result.log_path}")
+            print(t("cli.log_is", path=result.log_path))
     return EXIT_OK if result.ok else EXIT_FAILED
 
 
@@ -1546,26 +1567,32 @@ def _cmd_profile(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
             print(json.dumps(rows, indent=2))
         elif rows:
             for row in rows:
-                print(f"{row['name']}: {', '.join(row['instance_ids']) or '(empty)'}")
+                print(
+                    t(
+                        "cli.profile_row",
+                        name=row["name"],
+                        members=", ".join(row["instance_ids"]) or T["cli.profile_empty"],
+                    )
+                )
         else:
-            print("no launch profile configured")
+            print(T["cli.no_profile_configured"])
         return EXIT_OK
 
     name = (args.name or "").strip()
     if not name:
-        parser.error(f"umm profile {action} needs a NAME")
+        parser.error(t("cli.profile_needs_name", action=action))
 
     if action == "add":
         raw_ids: list[object] = list(args.instance_ids or [])
         ids = [str(item).strip() for item in raw_ids if str(item).strip()]
         if not ids:
-            parser.error("umm profile add needs at least one --instance ID")
+            parser.error(T["cli.profile_needs_member"])
         profile = manager_config.Profile(name=name, instance_ids=tuple(dict.fromkeys(ids)))
         manager_config.upsert_profile(profile)
         if args.json:
             print(json.dumps(profile.to_dict(), indent=2))
         else:
-            print(f"profile {name}: {', '.join(profile.instance_ids)}")
+            print(t("cli.profile_row", name=name, members=", ".join(profile.instance_ids)))
         return EXIT_OK
 
     if action == "remove":
@@ -1573,12 +1600,12 @@ def _cmd_profile(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
         if args.json:
             print(json.dumps({"name": name, "removed": removed}, indent=2))
         else:
-            print(f"profile {name} removed" if removed else f"no profile {name}")
+            print(t("cli.profile_removed", name=name) if removed else t("cli.no_such_profile", name=name))
         return EXIT_OK if removed else EXIT_NO_MATCH
 
     profile = profiles.resolve(name)
     if profile is None:
-        print(f"no profile {name} (see 'umm profile list')")
+        print(t("cli.no_such_profile_hint", name=name))
         return EXIT_NO_MATCH
     plan = profiles.plan(profile, discover(), stop_others=not bool(args.no_stop_others))
 
@@ -1600,13 +1627,13 @@ def _cmd_profile(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
         return EXIT_OK
 
     if plan.is_empty:
-        print(f"profile {name}: nothing to do")
+        print(t("cli.profile_nothing_to_do", name=name))
         return EXIT_OK
     if not args.yes:
         for line in profiles.describe(plan):
             print(line)
         if not _confirm(f"apply profile {name}?"):
-            print("cancelled")
+            print(T["cli.cancelled"])
             return EXIT_OK
     result = profiles.apply_plan(plan, on_event=None if args.json else _process_event_printer)
     if args.json:
@@ -1668,13 +1695,13 @@ def _print_validation(report: ValidationReport, path: Path) -> None:
     errors = report.errors
     unknown = report.unknown_keys
     if errors:
-        print(f"{path}: {len(errors)} valori non validi")
+        print(t("cli.invalid_values", path=path, count=len(errors)))
         for line in report.formatted():
             print(line)
     else:
-        print(f"{path}: valido")
+        print(t("cli.valid", path=path))
     if unknown:
-        print("  chiavi sconosciute (conservate): " + ", ".join(unknown))
+        print(t("cli.unknown_keys_kept", keys=", ".join(unknown)))
 
 
 def _cmd_config(args: argparse.Namespace) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - one branch per subaction
@@ -1683,7 +1710,7 @@ def _cmd_config(args: argparse.Namespace) -> int:  # noqa: C901, PLR0911, PLR091
 
     instance = _config_instance(args.instance)
     if instance is None:
-        print(f"umm config: nessuna istanza selezionata da --instance {args.instance!r}")
+        print(t("cli.config_no_instance", selector=repr(args.instance)))
         return EXIT_NO_MATCH
 
     kind = instance.kind.key
@@ -1695,9 +1722,15 @@ def _cmd_config(args: argparse.Namespace) -> int:  # noqa: C901, PLR0911, PLR091
         if args.json:
             print(json.dumps(loaded.to_dict(), indent=2, ensure_ascii=False))
         else:
-            print(f"# {path}{'' if loaded.exists else '  (non esiste)'}")
+            print(
+                t(
+                    "cli.config_file_header",
+                    path=path,
+                    suffix="" if loaded.exists else T["cli.does_not_exist_suffix"],
+                )
+            )
             if loaded.error:
-                print(f"# errore: {loaded.error}")
+                print(t("cli.config_read_error", error=loaded.error))
             print(store.dumps(loaded.data).rstrip())
         return EXIT_OK
 
@@ -1714,49 +1747,49 @@ def _cmd_config(args: argparse.Namespace) -> int:  # noqa: C901, PLR0911, PLR091
 
     if args.action == "create":
         if path.is_file():
-            print(f"umm config create: {path} esiste già")
+            print(t("cli.config_exists", path=path))
             return EXIT_FAILED
         target = store.suggested_path(instance)
         store.create_default(target)
-        print(f"creato {target}")
+        print(t("cli.created", path=target))
         return EXIT_OK
 
     if args.action in ("set", "unset"):
         if not rest:
-            print(f"umm config {args.action}: manca la chiave")
+            print(t("cli.config_missing_key", action=args.action))
             return EXIT_FAILED
         key = rest[0]
         data = dict(loaded.data)
         if args.action == "set":
             if len(rest) < 2:
-                print("umm config set: manca il valore")
+                print(T["cli.config_missing_value"])
                 return EXIT_FAILED
             data[key] = parse_setting_value(rest[1])
         else:
             if key not in data:
-                print(f"umm config unset: {key} non era impostata")
+                print(t("cli.config_not_set", key=key))
                 return EXIT_OK
             del data[key]
         report = store.validate(kind, data)
         if report.errors:
             _print_validation(report, path)
-            print("nulla è stato scritto")
+            print(T["cli.nothing_written"])
             return EXIT_FAILED
         store.save(path, report.normalized, instance=instance)
-        print(f"{key} {'impostata' if args.action == 'set' else 'rimossa'} in {path}")
+        print(t("cli.key_set" if args.action == "set" else "cli.key_unset", key=key, path=path))
         return EXIT_OK
 
     if args.action == "export":
         if not rest:
-            print("umm config export: manca la destinazione")
+            print(T["cli.config_missing_dest"])
             return EXIT_FAILED
         written = history_module.export(instance, Path(rest[0]), data=loaded.data)
-        print(f"esportato in {written}")
+        print(t("cli.exported_to", path=written))
         return EXIT_OK
 
     if args.action == "import":
         if not rest:
-            print("umm config import: manca il file di origine")
+            print(T["cli.config_missing_source"])
             return EXIT_FAILED
         result = history_module.import_(instance, Path(rest[0]))
         if args.json:
@@ -1774,11 +1807,11 @@ def _cmd_config(args: argparse.Namespace) -> int:  # noqa: C901, PLR0911, PLR091
             print(json.dumps([version.to_dict() for version in versions], indent=2, ensure_ascii=False))
             return EXIT_OK
         if not versions:
-            print("nessuna versione archiviata")
+            print(T["cli.no_archived_version"])
             return EXIT_OK
         for number, version in enumerate(versions, start=1):
             stamp = version.saved_at.isoformat() if version.saved_at else version.stamp
-            print(f"{number:>3}  {stamp}  {version.size} byte")
+            print(t("cli.archived_row", number=number, stamp=stamp, size=version.size))
         return EXIT_OK
 
     if args.action in ("diff", "restore"):
@@ -1787,10 +1820,10 @@ def _cmd_config(args: argparse.Namespace) -> int:  # noqa: C901, PLR0911, PLR091
             try:
                 number = int(rest[0])
             except ValueError:
-                print(f"umm config {args.action}: {rest[0]!r} non è un numero di versione")
+                print(t("cli.not_a_version_number", action=args.action, value=rest[0]))
                 return EXIT_FAILED
         if not 1 <= number <= len(versions):
-            print(f"umm config {args.action}: versione {number} inesistente (ce ne sono {len(versions)})")
+            print(t("cli.no_such_version", action=args.action, number=number, count=len(versions)))
             return EXIT_FAILED
         version = versions[number - 1]
         data = history_module.read_version(instance, version.stamp) or {}
@@ -1799,19 +1832,19 @@ def _cmd_config(args: argparse.Namespace) -> int:  # noqa: C901, PLR0911, PLR091
             if args.json:
                 print(json.dumps([line.to_dict() for line in lines], indent=2, ensure_ascii=False))
             elif not lines:
-                print(f"la versione {number} è identica al file attuale")
+                print(t("cli.version_identical", number=number))
             else:
-                print(f"versione {number} ({version.stamp}) -> file attuale")
+                print(t("cli.version_vs_current", number=number, stamp=version.stamp))
                 for line in lines:
                     before = json.dumps(line.before, ensure_ascii=False) if line.change != "added" else "-"
                     after = json.dumps(line.after, ensure_ascii=False) if line.change != "removed" else "-"
                     print(f"  {line.change:<7} {line.key}: {before} -> {after}")
             return EXIT_OK
         history_module.restore(instance, version.stamp)
-        print(f"ripristinata la versione {number} ({version.stamp}) in {path}")
+        print(t("cli.version_restored", number=number, stamp=version.stamp, path=path))
         return EXIT_OK
 
-    print(f"umm config {args.action}: not implemented")
+    print(t("cli.not_implemented", command=f"config {args.action}"))
     return EXIT_NOT_IMPLEMENTED
 
 
@@ -1829,7 +1862,7 @@ def _cmd_import_legacy(args: argparse.Namespace) -> int:
         print(json.dumps(report.to_dict(), indent=2))
     else:
         if args.dry_run:
-            print("umm import-legacy --dry-run: nessuna modifica verra' scritta")
+            print(T["cli.import_dry_run"])
         for line in report.lines():
             print(line)
     return 0
@@ -1848,13 +1881,13 @@ def _cmd_autostart_manager(action: str, as_json: bool) -> int:
         try:
             command = set_manager_autostart(action == "on")
         except OSError as error:
-            print(f"umm autostart: {error}", file=sys.stderr)
+            print(t("cli.autostart_error", error=error), file=sys.stderr)
             return EXIT_FAILED
     if as_json:
         print(json.dumps(_autostart_payload("manager", command), indent=2))
     else:
-        state = f"si ({command})" if command else "no"
-        print(f"manager: avvio con Windows: {state}")
+        state = t("cli.autostart_yes", command=command) if command else T["cli.autostart_no"]
+        print(t("cli.autostart_manager", state=state))
     return 0
 
 
@@ -1865,7 +1898,7 @@ def _cmd_autostart_instance(instance_id: str, action: str, as_json: bool) -> int
     wanted = _normalize_instance_id(instance_id)
     matches = [i for i in discover() if _normalize_instance_id(i.instance_id) == wanted]
     if not matches:
-        print(f"umm autostart: nessuna istanza con id {instance_id!r}", file=sys.stderr)
+        print(t("cli.autostart_no_instance", id=repr(instance_id)), file=sys.stderr)
         return EXIT_NO_MATCH
     instance = matches[0]
     try:
@@ -1874,13 +1907,13 @@ def _cmd_autostart_instance(instance_id: str, action: str, as_json: bool) -> int
         else:
             command = process_control.set_instance_autostart(instance, action == "on")
     except (OSError, ValueError) as error:
-        print(f"umm autostart: {error}", file=sys.stderr)
+        print(t("cli.autostart_error", error=error), file=sys.stderr)
         return EXIT_FAILED
     if as_json:
         print(json.dumps(_autostart_payload(instance.instance_id, command), indent=2))
     else:
-        state = f"si ({command})" if command else "no"
-        print(f"{instance.instance_id}: avvio con Windows: {state}")
+        state = t("cli.autostart_yes", command=command) if command else T["cli.autostart_no"]
+        print(t("cli.autostart_instance", instance=instance.instance_id, state=state))
     return 0
 
 
@@ -1923,7 +1956,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # The user-defined kinds must be in the registry before the parser is
     # built: they are valid --kind values (PLAN.md section 9.9).
     for problem in kind_registry.reload():
-        print(f"manager-config.json: {problem}", file=sys.stderr)
+        print(t("cli.config_problem", problem=problem), file=sys.stderr)
     diag.setup_manager_logging()
     parser = build_parser()
     raw = raw_args
@@ -1968,7 +2001,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_import_legacy(args)
     if args.command == "autostart":
         return _cmd_autostart(args)
-    print(f"umm {args.command}: not implemented")
+    print(t("cli.not_implemented", command=args.command))
     return EXIT_NOT_IMPLEMENTED
 
 
