@@ -54,15 +54,22 @@ umm restart (--all | --kind claude | --config-dir PATH | --id ...)
 umm stop / start ...
 umm check [--kind ...] [--changelog] [--prerelease] [--json]
 umm update (--kind copilot | --all) [--yes] [--no-restart] [--dry-run] [--json]
-umm rollback --kind copilot [--no-restart] [--json]
+umm rollback --kind copilot [--version 0.3.1] [--no-restart] [--json]
+umm archive list|prune [--kind ...] [--keep N] [--json]
+umm skip --kind copilot|manager   /   umm unskip --kind copilot|manager
 umm config show|validate|set KEY VALUE|unset KEY|create|export DEST|import SRC|history|diff [N]|restore N --instance ID
-umm self-update [--check-only]
-umm status [--json]
+umm token set|clear|status [--from-env VAR] [--json]
+umm self-update [--check-only] [--yes] [--dry-run] [--json]
+umm status [--json] [--check]
 umm tray
 umm import-legacy [--dry-run] [--json]
 umm autostart --manager [on|off|status] [--json]
 umm autostart --instance ID [on|off|status] [--json]
 ```
+
+Codici di uscita: `0` tutto bene, `1` almeno un'operazione fallita, `3` nessuna
+istanza corrispondente / errore di rete, `4` aggiornamento saltato perche'
+l'asset non e' verificabile, `10` (`umm check`) ci sono aggiornamenti.
 
 Senza argomenti, `python -m usage_monitor_manager` avvia la modalità tray
 (`umm tray` fa lo stesso; `--tray`, la forma scritta nella Run key secondo
@@ -144,6 +151,148 @@ da aggiungere: 4
 Nulla viene rimosso o modificato nelle sorgenti legacy: il manager le legge e
 basta.
 
+### Token GitHub
+
+Facoltativo: senza token le richieste sono anonime e GitHub concede 60
+chiamate l'ora, che con quattro repo controllati ogni sei ore bastano, ma la
+cache ETag e il rate limit sono piu' comodi con un token. Il valore vive nel
+**Windows Credential Manager** (target `UsageMonitorManager/github`), non in
+`manager-config.json` e non accanto all'eseguibile.
+
+```powershell
+# da stdin: il token non compare mai in argv, quindi nemmeno nella cronologia
+umm token set
+
+# oppure da una variabile d'ambiente gia' impostata
+umm token set --from-env GITHUB_TOKEN
+
+umm token status
+umm token clear
+```
+
+```
+> umm token status
+token: absent (source: none)
+credential target: UsageMonitorManager/github
+```
+
+L'ordine di risoluzione e' **Credential Manager -> `GITHUB_TOKEN` ->
+`GH_TOKEN` -> anonimo**. La pagina «Manager» ha lo stesso comando con un campo
+mascherato e mostra lo stato del rate limit; il token, una volta salvato, non
+viene mai piu' mostrato ne' restituito alla pagina.
+
+### Aggiornamento del manager
+
+Il manager si aggiorna con lo stesso motore dei monitor, dal proprio repo. Su
+Windows un eseguibile in esecuzione si puo' rinominare ma non sovrascrivere,
+quindi la sequenza e': download `.download` accanto all'exe, verifica sha256,
+`UsageMonitorManager.exe` -> `.bak`, `.download` -> `.exe`, avvio del nuovo
+processo con `--post-update <pid vecchio>` e uscita pulita della tray. Il nuovo
+processo attende la morte del vecchio (che tiene ancora il mutex singleton),
+cancella il `.bak` e notifica «Manager aggiornato alla vX.Y.Z».
+
+```
+> umm self-update --check-only
+nessuna release pubblicata per hybrid2102/usage-monitor-manager
+```
+
+Il repo non ha ancora release: lo stato e' `unknown`, non un errore, e la UI lo
+dice cosi'. `--dry-run` elenca i passi senza toccare nulla; da sorgente
+(`python -m usage_monitor_manager`) il self-update si rifiuta e suggerisce
+`git pull`.
+
+### Cronologia delle versioni e rollback
+
+Dopo un aggiornamento riuscito l'eseguibile sostituito non sparisce: finisce in
+`.umm-archive` accanto a quello nuovo, con un `manifest.json` che ne registra
+versione, sha256, data e tag di release.
+
+```
+D:\OneDrive\Software\Tools\AI\Copilot\
+  UsageMonitorForCopilot.exe
+  .umm-archive\
+    manifest.json
+    UsageMonitorForCopilot-0.3.1.exe
+    UsageMonitorForCopilot-0.3.0.exe
+```
+
+```
+> umm archive list
+KIND     VERSION  ARCHIVED             TAG      FILE
+copilot  0.3.1    2026-09-18 10:42:03  v0.3.1   UsageMonitorForCopilot-0.3.1.exe
+copilot  0.3.0    2026-09-02 08:11:55  v0.3.0   UsageMonitorForCopilot-0.3.0.exe
+```
+
+Si conservano le ultime tre build per eseguibile (`archive_keep` nelle
+preferenze, `umm archive prune --keep N` per potare subito).
+`umm rollback --kind copilot` rimette la precedente (il `.bak` se c'e' ancora,
+altrimenti la piu' recente in archivio) e `--version 0.3.0` una qualsiasi:
+ferma le istanze, scambia gli eseguibili — **archiviando anche quello che era
+in uso**, quindi il ripristino e' a sua volta reversibile — e riavvia solo le
+istanze che erano attive. Lo stesso dalla pagina «Aggiornamenti», con il
+bottone «Ripristina».
+
+`.umm-archive` e' in `.gitignore`.
+
+### Watchdog
+
+Ogni 30 secondi il manager confronta la fotografia dei processi con la
+precedente e segnala tre anomalie:
+
+| Anomalia | Significato | «Ripara» |
+|---|---|---|
+| `crashed` | l'istanza era in esecuzione e non lo e' piu' | la riavvia |
+| `duplicate` | due processi app per lo stesso `(kind, suffisso)`, e i monitor sono singleton | termina i doppioni tenendo il **piu' vecchio** |
+| `orphan` | coppia bootloader/app incompleta | ferma quel che resta e riavvia l'istanza |
+
+Le anomalie compaiono nella colonna «Stato» della dashboard, nel tooltip della
+tray e in `umm status`. Quando e' il manager a fermare, riavviare o aggiornare
+un'istanza lo annuncia a un registro interno a scadenza, cosi' le proprie
+operazioni non vengono mai scambiate per un crash. Con
+`auto_restart_crashed` (default: disattivo) il riavvio e' automatico; i
+duplicati non vengono **mai** terminati da soli, e comunque solo processi il
+cui eseguibile coincide con quello dell'istanza.
+
+### Aggiornamenti pianificati
+
+`umm update --all --yes` non chiede mai nulla ed e' pensato per il Task
+Scheduler: un asset di cui GitHub non pubblica lo sha256 viene **saltato**
+(uscita 4) invece di essere installato alla cieca, un errore di rete esce 3 e un
+fallimento parziale esce 1. `--log FILE` aggiunge una riga JSON per passo, che
+e' l'unica traccia che resta quando non c'e' una console.
+
+```powershell
+schtasks /Create /TN "Usage Monitor Manager - aggiornamenti" /SC DAILY /ST 03:30 ^
+  /TR "\"D:\OneDrive\Software\Tools\AI\UsageMonitorManager.exe\" update --all --yes --log \"%LOCALAPPDATA%\UsageMonitorManager\update.log\"" ^
+  /RL LIMITED /F
+```
+
+```json
+{"ts": "2026-09-18T03:30:11+00:00", "kind": "copilot", "exe_path": "D:\\...\\UsageMonitorForCopilot.exe", "step": "download", "message": "UsageMonitorForCopilot.exe: 15260446 of 15260446 bytes", "progress": 1.0}
+{"ts": "2026-09-18T03:30:14+00:00", "kind": "copilot", "exe_path": "D:\\...\\UsageMonitorForCopilot.exe", "step": "result", "ok": true, "message": "updated to 0.3.2: version verified and every restarted instance is running", "from_version": "0.3.1", "to_version": "0.3.2"}
+```
+
+`umm status --json` e' la controparte da leggere (statusline, script): istanze,
+stato aggiornamenti memorizzato e anomalie del watchdog, **senza nessuna
+chiamata di rete** se non si passa `--check`.
+
+```
+> umm status --json
+{
+  "version": "0.7.0",
+  "instances": [
+    { "id": "claude", "kind": "claude", "label": "Claude", "local_version": "1.22.0", "is_running": true, "pid": 9980 },
+    { "id": "claude_578560bbc610", "kind": "claude", "label": "Claude Valeria", "local_version": "1.22.0", "is_running": true, "pid": 4512 },
+    { "id": "copilot", "kind": "copilot", "label": "Copilot", "local_version": "0.3.1", "is_running": true, "pid": 9588 },
+    { "id": "codex", "kind": "codex", "label": "Codex", "local_version": "0.1.0", "is_running": true, "pid": 29356 }
+  ],
+  "running": 4,
+  "updates": { "checked": false, "available": 0, "error": null },
+  "self_update": null,
+  "watchdog": { "last_poll": "2026-09-18T12:13:12+00:00", "count": 0, "events": [] }
+}
+```
+
 ### Build
 
 ```powershell
@@ -158,6 +307,13 @@ tutto su `windows-latest` e pubblica l'exe con il suo `.sha256`, usando la
 sezione corrispondente di `CHANGELOG.md` come note.
 
 ## Stato
+
+**Fase 6 (Self-update e robustezza) completata** (`v0.7.0`): il manager
+aggiorna se stesso (`umm self-update`, `--post-update`), tiene il token GitHub
+nel Credential Manager, conserva le build precedenti in `.umm-archive` con
+ripristino di una qualsiasi di esse, sorveglia le istanze (crash, duplicati,
+coppie orfane), sa saltare una versione e ha una modalità non presidiata per il
+Task Scheduler (`umm update --all --yes --log`, `umm status --json`).
 
 **Fase 5 (Editor impostazioni) completata** (`v0.6.0`): da qui **anche
 `usage-monitor-config-editor` è sostituibile** — l'editor conosce tutte le
@@ -311,6 +467,23 @@ Dalla Fase 4 sono inoltre reali e testati:
   manager e `process_control.set_instance_autostart` per le istanze, con la
   radice di registro iniettabile (i test non toccano mai `HKCU\...\Run`).
 
-I moduli delle fasi successive (editor impostazioni, self-update, watchdog,
-archivio, storico) sono ancora stub con docstring di responsabilità e sono
-descritti in PLAN.md §7.
+Dalla Fase 6:
+
+- `secrets.py` — Credential Manager in ctypes, backend sostituibile, target
+  iniettabile; il token non passa mai da `argv` e non viene mai ristampato;
+- `self_update.py` — `check_self` (nessuna release = `unknown`, non un errore),
+  `apply_self` solo su build congelata con rilancio `--post-update` e ambiente
+  ripulito, `finish_post_update` che attende il vecchio pid e cancella il `.bak`;
+- `archive.py` — `.umm-archive` con manifest, keep-N per eseguibile, `restore`
+  che riusa `FileSwapper` e archivia a sua volta la build sostituita;
+- `watchdog.py` — confronto fra snapshot, `crashed` / `duplicate` / `orphan`,
+  registro «expected down» perché le operazioni del manager non passino per
+  crash, riparazioni mirate;
+- CLI — `umm token`, `umm self-update`, `umm archive`, `umm skip` / `umm unskip`,
+  `umm rollback --version`, `umm status --json` e `umm update --all --yes` con
+  i codici di uscita e il log JSON per il Task Scheduler.
+
+Restano alla fase 7 il kind generico «exe da GitHub Releases» (§9.9), la
+modalità diagnostica (§9.7), il file `status.json` scritto dalla tray (§9.11),
+i profili di avvio (§9.13) e l'hotkey globale (§9.14); PLAN.md §7 tiene il
+quadro.

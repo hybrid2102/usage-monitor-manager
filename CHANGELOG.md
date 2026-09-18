@@ -8,6 +8,88 @@ Ogni versione corrisponde a una fase del piano di sviluppo (`PLAN.md`, §7).
 
 ## [Non rilasciato]
 
+## [0.7.0] - 2026-09-18
+
+Fase 6 - self-update e robustezza. Il manager sa aggiornare se stesso, conserva
+le build precedenti, sorveglia le istanze e ha una modalita' completamente non
+interattiva per il Task Scheduler.
+
+### Aggiunto
+
+- **`secrets.py`** (sezione 6.5-bis) - token GitHub nel **Windows Credential
+  Manager** via ctypes `advapi32` (`CredReadW` / `CredWriteW` / `CredDeleteW`,
+  `CRED_TYPE_GENERIC`, target `UsageMonitorManager/github`, persistenza
+  `CRED_PERSIST_LOCAL_MACHINE`), nessuna dipendenza `keyring`. Ordine di
+  risoluzione Credential Manager -> `GITHUB_TOKEN` -> `GH_TOKEN` -> anonimo;
+  `github.resolve_token` delega qui. Il valore non passa mai da `argv` e non
+  viene mai ristampato: `umm token set` lo legge da stdin o da `--from-env VAR`,
+  la UI usa un campo mascherato e mostra solo "presente / assente".
+- **`self_update.py`** (sezione 6.5) - `check_self()` sul repo del manager
+  (nessuna release pubblicata = stato `unknown` con "nessuna release
+  pubblicata", non un errore) e `apply_self()` solo sulla build congelata:
+  download `.download` accanto a `sys.executable`, verifica sha256, `exe` ->
+  `exe.bak`, `.download` -> `exe`, rilancio `[nuovo exe, --post-update, <pid>]`
+  staccato e con ambiente ripulito dalle variabili `_PYI_*` / `_MEI*`, poi
+  uscita pulita della tray. `umm --post-update PID` attende la morte del
+  processo precedente (psutil, 30 s), cancella il `.bak`, acquisisce il mutex
+  singleton con attesa e avvia la tray notificando "Manager aggiornato alla
+  vX.Y.Z". Da sorgente il self-update si rifiuta con un messaggio chiaro.
+- **`archive.py`** (sezione 9.4) - a ogni aggiornamento riuscito l'eseguibile
+  sostituito viene **spostato** in `<cartella exe>\.umm-archive\` come
+  `<Nome>-<versione>.exe`, con un `manifest.json` che registra versione,
+  sha256, data e tag di release; si conservano le ultime N build per
+  eseguibile (`preferences.archive_keep`, default 3). `restore()` ferma le
+  istanze, rimette al suo posto la build scelta - archiviando a sua volta
+  quella corrente, quindi il ripristino e' reversibile - e riavvia.
+  CLI: `umm rollback --kind K [--version V]`, `umm archive list|prune`.
+- **`watchdog.py`** (sezione 9.2) - thread che confronta snapshot consecutivi
+  ogni 30 s e segnala `crashed` (era in esecuzione, non lo e' piu'),
+  `duplicate` (due processi app per lo stesso suffisso) e `orphan` (coppia
+  bootloader/app incompleta). Le operazioni del manager (stop, riavvio,
+  aggiornamento) si annunciano in un registro "expected down" a scadenza, cosi'
+  non vengono scambiate per crash. Riparazioni: avvio, kill dei duplicati
+  tenendo il **piu' vecchio** (e solo processi il cui exe coincide), riavvio
+  della coppia orfana. `preferences.auto_restart_crashed` (default: off)
+  riavvia da solo.
+- **Canale prerelease e "salta versione"** (sezione 9.5) - `include_prerelease`
+  globale piu' override per repo (`prerelease_repos`), `skipped_versions[repo]`
+  scritto da tray, UI e `umm skip --kind K` (anche `--kind manager`);
+  `umm check` mostra lo stato `skipped` e non esce piu' 10,
+  `--include-skipped` forza. `umm unskip --kind K` annulla.
+- **Aggiornamento pianificato** (sezione 9.10) - `umm update --all --yes` non
+  chiede mai nulla: un asset senza sha256 viene **saltato** con uscita 4
+  (`--allow-unverified` per accettarlo), un errore di rete esce 3, un
+  fallimento parziale esce 1. `--log FILE` scrive una riga JSON per ogni passo.
+  Il README documenta un esempio con `schtasks`.
+- **`umm status [--json] [--check]`** (sezione 9.11, forma minima) - istanze,
+  stato aggiornamenti memorizzato e una passata di watchdog; **nessuna chiamata
+  di rete** senza `--check`. Il file `status.json` resta alla fase 7.
+- **UI** - pagina Manager con token (imposta / rimuovi / stato / rate limit) e
+  self-update con progresso; pagina Aggiornamenti con le versioni archiviate e
+  "Ripristina" piu' "Salta questa versione"; dashboard con colonna Stato,
+  badge delle anomalie e bottone "Ripara"; tray con "Aggiorna il manager",
+  "Salta questa versione", "Ripara", tooltip e badge che contano le anomalie.
+- **`discovery.running_processes()`** - vista *non collassata* dei processi in
+  esecuzione: `discover()` unisce tutto in una istanza per `(kind, config dir)`,
+  che e' esattamente cio' che nasconderebbe un duplicato al watchdog.
+
+### Modificato
+
+- `umm update --yes` **non** installa piu' un asset privo di sha256: era la
+  scorciatoia interattiva della fase 3, ora e' il percorso non presidiato e
+  rifiuta, uscendo 4. `--allow-unverified` e' l'opt-in esplicito.
+- `updater.apply` archivia la build precedente prima di cancellare il `.bak` e
+  annota nel manifest la release appena installata; `plan_updates` accetta
+  `prerelease_for(repo)`.
+- `UpdateState` espone `skipped` e `self_update`, e `update_count` conta anche
+  l'aggiornamento del manager.
+
+### Test
+
+623 test. `tests/conftest.py` vieta a tutta la suite la rete (`github._open`) e
+il Credential Manager reale; i test del Credential Manager vero usano il target
+`UsageMonitorManagerTest/github` e lo cancellano.
+
 ## [0.6.0] - 2026-09-18
 
 Fase 5 - editor delle impostazioni. **Da qui `usage-monitor-config-editor` è
