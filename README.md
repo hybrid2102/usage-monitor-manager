@@ -55,7 +55,7 @@ umm stop / start ...
 umm check [--kind ...] [--changelog] [--prerelease] [--json]
 umm update (--kind copilot | --all) [--yes] [--no-restart] [--dry-run] [--json]
 umm rollback --kind copilot [--no-restart] [--json]
-umm config show|edit|validate|set KEY VALUE --instance ...
+umm config show|validate|set KEY VALUE|unset KEY|create|export DEST|import SRC|history|diff [N]|restore N --instance ID
 umm self-update [--check-only]
 umm status [--json]
 umm tray
@@ -96,16 +96,23 @@ avviso ed esce.
 
 «Apri Manager…» apre la finestra pywebview (tema scuro coerente con i popup dei
 monitor). Viene creata una sola volta e nascosta alla chiusura, così
-riaprirla è istantaneo. Tre pagine:
+riaprirla è istantaneo. Quattro pagine:
 
 - **Dashboard** — tabella con tipo, etichetta, config dir, versione locale e
   remota, data dell'exe, PID, uptime, file di impostazioni attivo e toggle di
   autostart; per riga: Riavvia / Ferma / Avvia / Impostazioni / Cartella e,
-  quando serve, Aggiorna. Il pannello «Impostazioni» mostra per ora il JSON in
-  **sola lettura** (l'editor con i campi validati è la Fase 5).
+  quando serve, Aggiorna. «Impostazioni» apre la pagina omonima.
 - **Aggiornamenti** — changelog della release reso da un renderer markdown
   inline, barra di progresso del download, log degli eventi dell'update e i
   pulsanti «Aggiorna» e «Rollback».
+- **Impostazioni** — editor di `usage-monitor-settings.json` per istanza:
+  modulo generato dallo schema (sezioni collassabili, ricerca, «impostata» e
+  reset al default per chiave, validazione inline con le regole del monitor),
+  tab JSON con diff «salvato ↔ bozza», sezione «Altre chiavi» per ciò che lo
+  schema non conosce, tab «Storico» (versioni archiviate, diff, ripristino,
+  esporta/importa) e barra con Salva, Salva e riavvia istanza, Ricarica, Crea
+  file, Apri cartella, Copia da…, preset brand con anteprima e Testa quick
+  action (con conferma).
 - **Manager** — versione, preferenze (avvio con Windows, notifiche,
   prerelease, intervallo di controllo), **presenza** del token GitHub e stato
   del rate limit, importazione della configurazione precedente e log.
@@ -152,13 +159,18 @@ sezione corrispondente di `CHANGELOG.md` come note.
 
 ## Stato
 
-**Fase 4 (Tray + dashboard) completata** (`v0.5.0`): il manager ha ora una
-tray, una finestra, il controllo aggiornamenti periodico, la gestione
-dell'autostart e una pipeline di build/release. Dalla fase precedente
-**`usage-monitor-updater` (PowerShell) è sostituibile**: confronto versioni,
-changelog, download verificato, swap con `.bak`, riavvio delle istanze e
-rollback sono coperti da `umm check` / `umm update` / `umm rollback` e dalla
-pagina Aggiornamenti.
+**Fase 5 (Editor impostazioni) completata** (`v0.6.0`): da qui **anche
+`usage-monitor-config-editor` è sostituibile** — l'editor conosce tutte le
+chiavi documentate dei tre monitor, le valida con le regole del monitor prima
+di scrivere, conserva le chiavi sconosciute, archivia ogni salvataggio con
+storico/diff/ripristino, esporta e importa profili, copia sezioni fra istanze
+e genera la palette dai preset brand (`umm config …` e la pagina
+«Impostazioni»).
+
+**`usage-monitor-updater` (PowerShell) è sostituibile** dalla fase 3: confronto
+versioni, changelog, download verificato, swap con `.bak`, riavvio delle
+istanze e rollback sono coperti da `umm check` / `umm update` /
+`umm rollback` e dalla pagina Aggiornamenti.
 
 Oltre allo scheletro della Fase 0 (`kinds.py`, `model.py`, `identity.py`,
 tooling, CI) sono reali e testati:

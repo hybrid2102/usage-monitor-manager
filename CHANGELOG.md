@@ -8,6 +8,58 @@ Ogni versione corrisponde a una fase del piano di sviluppo (`PLAN.md`, §7).
 
 ## [Non rilasciato]
 
+## [0.6.0] - 2026-09-18
+
+Fase 5 - editor delle impostazioni. **Da qui `usage-monitor-config-editor` è
+sostituibile**: l'editor del manager conosce tutte le chiavi documentate dei
+tre monitor, non solo le tre che il vecchio editor gestiva, e aggiunge
+validazione, storico, diff e copia fra istanze.
+
+### Aggiunto
+
+- **`settings/schema.py`** - schema dichiarativo per kind, trascritto dai tre
+  `docs/configuration.md`: per ogni chiave `type`, `default`, `section`,
+  `help` in italiano, `applies_to`, minimo, scelte e suggerimenti. Tipi:
+  `int`, `bool`, `percent`, `hex_color`, `rgba_dict`, `string`, `enum`,
+  `string_list`, `wildcard_list`, `command`, `threshold_list`, `amount_list`,
+  `cli_command_map`, `icon_fields` e la famiglia `prefix_family` per
+  `alert_thresholds_<campo>`.
+- **`settings/store.py`** - lettura `utf-8-sig`, `validate()` come porting di
+  `settings._validate()` dei monitor (stesse regole, stessi messaggi, stesse
+  normalizzazioni: soglie ordinate e deduplicate, comando stringa -> lista,
+  `*` al massimo una volta, canali RGBA non validi rimossi), salvataggio
+  atomico con `.bak` e **chiavi sconosciute preservate**, `create_default`,
+  `suggested_path` (primo elemento della search order del monitor) e
+  `copy_sections` per copiare intere sezioni fra istanze.
+- **`history.py`** (sezione 9.6) - ogni salvataggio archivia una copia datata
+  in `%LOCALAPPDATA%\UsageMonitorManager\history\<istanza>\`, con
+  `list_versions`, `read_version`, `diff` per chiave, `restore` (che ripassa
+  da `store.save`, quindi si archivia a sua volta), `export` / `import_` di
+  profili portabili e potatura alle ultime 50 versioni.
+- **`settings/presets.py`** - preset brand e `palette_from_primary` portati dal
+  config editor (fusione al 65 % verso bianco/nero per `icon_light` /
+  `icon_dark`, gli altri canali restano intatti), più `readable_text_color`.
+- **Pagina «Impostazioni»** nella finestra: modulo generato dallo schema con
+  sezioni collassabili, ricerca, stato "impostata" e reset al default per
+  chiave, validazione inline con le stesse regole del monitor; tab JSON
+  editabile con diff "salvato / bozza"; sezione "Altre chiavi" per le chiavi
+  sconosciute; tab "Storico" con diff, ripristino, esportazione e importazione;
+  barra con *Salva*, *Salva e riavvia istanza*, *Ricarica*, *Crea file*,
+  *Apri cartella*, *Copia da...*, preset brand con anteprima e *Testa quick
+  action* (con conferma). La voce «Impostazioni…» della dashboard e del menu
+  tray apre questa pagina.
+- **CLI**: `umm config show|validate|set|unset|create|export|import|history|diff [N]|restore N --instance ID`,
+  con `--json` dove ha senso; `set` interpreta il valore come JSON e ricade
+  sulla stringa.
+
+### Modificato
+
+- `JsApi` espone `get_settings`, `get_schema`, `validate_draft`,
+  `save_settings`, `create_settings`, `list_history`, `get_history_version`,
+  `restore_history`, `export_settings`, `import_settings`,
+  `copy_settings_from`, `apply_preset`, `get_presets` e `test_quick_action`;
+  `get_settings_raw` (sola lettura, Fase 4) è stato sostituito.
+
 ## [0.5.0] - 2026-09-18
 
 Fase 4 — tray, dashboard e distribuzione.
