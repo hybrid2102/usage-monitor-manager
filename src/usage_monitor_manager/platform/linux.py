@@ -1,9 +1,22 @@
 """Linux primitives: documented stub for a future phase (PLAN.md section 9.12).
 
-The signatures mirror ``win32.py`` so the dispatcher can import either module
-without the callers knowing which one they got. Every function raises
-``NotImplementedError``: the v1 implementation is Windows-only by decision
-(PLAN.md section 3, non-goals).
+The signatures mirror ``win32.py`` exactly, so the dispatcher in
+``platform/__init__.py`` can import either module and no caller has to know
+which one it got. Every primitive that would need a real Linux implementation
+raises ``NotImplementedError("Linux: previsto, non implementato ...")``: the v1
+is Windows-only by decision (PLAN.md section 3, non-goals), and a stub that
+raises is honest where a stub that returns a plausible empty answer would make
+the discovery quietly find nothing.
+
+Three functions do **not** raise, because on Linux the honest answer is the
+trivial one: :func:`attach_parent_console` (a POSIX process already has its
+parent's terminal), :func:`no_window_popen_kwargs` (there are no console
+windows to hide) and :func:`authenticode_status` (there is no Authenticode, and
+the caller already treats the answer as information only).
+
+``docs/architecture.md`` lists what a real port would have to build: ``flock``
+instead of the named mutex, XDG paths instead of ``%LOCALAPPDATA%`` and the Run
+key, and "run from source" instead of swapping an executable.
 """
 
 from __future__ import annotations
@@ -45,7 +58,12 @@ RegistryRoot = tuple[int, str]
 MANAGER_RUN_NAME = "UsageMonitorManager"
 """On Linux this would name a ``~/.config/autostart/*.desktop`` file."""
 
-_MESSAGE = "the Linux platform layer is a stub: see PLAN.md section 9.12"
+_MESSAGE = "Linux: previsto, non implementato (PLAN.md sezione 9.12, docs/architecture.md)"
+"""The one sentence every unimplemented primitive raises.
+
+It is in Italian on purpose: it is the message a user would see, and it says
+the two things that matter - the port is *planned*, not forgotten, and where
+the notes on what it needs live."""
 
 
 def _unsupported() -> NoReturn:
