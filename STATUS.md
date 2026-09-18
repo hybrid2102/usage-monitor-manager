@@ -1,6 +1,6 @@
 # Stato di avanzamento
 
-Aggiornato: 2026-09-18, ore 15:10. Riferimento: [PLAN.md](PLAN.md) §7.
+Aggiornato: 2026-09-18. Riferimento: [PLAN.md](PLAN.md) §7.
 
 ## Fasi completate (tutto su `main`, nulla pushato, nessun tag)
 
@@ -25,8 +25,13 @@ Fatto:
 - profili di avvio (`profiles.py`, `umm profile ...`, submenu tray, editor nella pagina Manager);
 - hotkey globale (`HotkeyListener` ctypes, preferenza `hotkey`, campo con "cattura").
 
+Test della fase 7 (in corso, un passo per commit):
+- [x] A1a kind custom (merge/validazione/persistenza) + discovery `github-exe` (coppia, dormiente, nessun `environ()`) + piano di update e archivio: `tests/test_kinds_custom.py`, `tests/test_discovery_github_exe.py`, fixture `pristine_kind_registry` in `conftest.py` (663 test);
+- [ ] A1b diag (argv `--verbose`, log path, stop torna in modalita normale) + `manager.log` rotante + status file (schema, scrittura atomica, `generated_at`);
+- [ ] A1c profili (piano/apply/dry-run, ferma solo la famiglia usage-monitor) + hotkey (parse/format/normalize, `user32` finto, conflitto);
+- [ ] A1d CLI `kind|diag|profile|status --write-file`.
+
 Da fare per chiudere la fase 7:
-- test unitari dei cinque punti sopra (kind custom, discovery github-exe, diag argv/log path, status file, profili, hotkey);
 - `docs/status-file.md`, voce CHANGELOG 0.8.0, README (kinds, diag, status file, profili, hotkey);
 - bump `__version__` a 0.8.0;
 - prova manuale della tray e della finestra (le fasi 5–7 sono verificate solo a livello API/test).

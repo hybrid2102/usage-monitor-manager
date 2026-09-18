@@ -56,3 +56,22 @@ def fresh_watchdog_registry() -> None:
     believe that same instance is allowed to be missing.
     """
     watchdog.reset_expected()
+
+
+@pytest.fixture(autouse=True)
+def pristine_kind_registry() -> Any:
+    """Undo whatever a test merged into the live kind registry.
+
+    ``kinds.KINDS`` is a process-wide dict that ``kinds.reload`` rewrites from
+    ``manager-config.json``. A test that adds a custom kind - or any code path
+    that reloads the registry from a temporary config file - would otherwise
+    decide what the *next* test discovers.
+    """
+    from usage_monitor_manager import kinds
+
+    saved = dict(kinds.KINDS)
+    try:
+        yield
+    finally:
+        kinds.KINDS.clear()
+        kinds.KINDS.update(saved)
