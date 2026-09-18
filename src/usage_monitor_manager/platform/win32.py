@@ -431,6 +431,27 @@ ATTACH_PARENT_PROCESS = -1
 """``AttachConsole`` argument meaning "the console of the parent process"."""
 
 
+def _stream_is_usable(stream: Any) -> bool:
+    """Whether ``stream`` can actually take a write, not just whether it exists.
+
+    A windowed (``console=False``) PyInstaller build hands Python a real
+    ``TextIOWrapper`` for ``sys.stdout`` even with no console and no
+    redirection at all - it is never ``None`` - but the handle underneath it
+    is invalid: ``write()`` happily buffers the text and only ``flush()``
+    (the actual OS-level write) raises ``OSError: [Errno 22] Invalid
+    argument``. Checking for ``None`` therefore misses the real windowed-with-
+    no-console case entirely, which is exactly the case this function exists
+    to detect.
+    """
+    if stream is None:
+        return False
+    try:
+        stream.flush()
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def attach_parent_console() -> bool:
     """Reattach stdout/stderr to the console that launched a windowed build.
 
@@ -442,10 +463,20 @@ def attach_parent_console() -> bool:
     ``CONIN$``, so the packaged executable behaves exactly like ``umm``.
 
     Returns ``True`` when a console is now attached. Never raises: a build
-    started from Explorer simply has no parent console and keeps its null
+    started from Explorer simply has no parent console and keeps its unusable
     streams.
+
+    Skips the attach entirely when :func:`_stream_is_usable` says the current
+    ``sys.stdout`` already takes a write - an inherited console, or output the
+    caller genuinely redirected to a pipe or a file via ``CreateProcess``'s own
+    standard-handle redirection. ``AttachConsole`` binds to the *calling
+    shell's* console independently of that, so it can succeed even when
+    stdout already works; reopening onto ``CONOUT$`` in that case would
+    silently steal the output away from whatever was reading the redirection.
     """
     if sys.platform != "win32":  # pragma: no cover - the dispatcher never gets here
+        return False
+    if _stream_is_usable(sys.stdout):
         return False
     try:
         if not _kernel32.AttachConsole(ATTACH_PARENT_PROCESS):

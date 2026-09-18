@@ -97,3 +97,60 @@ def test_no_window_popen_kwargs() -> None:
 
 def test_read_shortcuts_with_no_paths() -> None:
     assert win32.read_shortcuts([]) == {}
+
+
+def test_attach_parent_console_leaves_a_usable_stdout_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller that already redirected our output must not lose it.
+
+    ``AttachConsole`` binds to the calling shell's console independently of
+    whatever the caller did with our standard handles, so it can succeed even
+    when stdout is already a working pipe or file - reopening onto
+    ``CONOUT$`` in that case silently steals the output away from whatever is
+    reading the pipe (the bug that shipped in the first 1.0.0 release build).
+    """
+    monkeypatch.setattr(sys, "stdout", sys.stderr)
+
+    def _fail_if_called(_process_id: int) -> bool:
+        raise AssertionError("AttachConsole must not be called when stdout is already usable")
+
+    monkeypatch.setattr(win32._kernel32, "AttachConsole", _fail_if_called)
+
+    assert win32.attach_parent_console() is False
+
+
+def test_attach_parent_console_attaches_when_stdout_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The double-click-from-Explorer case: ``sys.stdout`` is ``None``."""
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    monkeypatch.setattr(sys, "stdin", None)
+    monkeypatch.setattr(win32._kernel32, "AttachConsole", lambda _process_id: False)
+
+    assert win32.attach_parent_console() is False
+
+
+class _BrokenStream:
+    """A windowed build's real ``sys.stdout``: present, but unusable.
+
+    ``write()`` happily buffers the text; only ``flush()`` - the actual
+    OS-level write - raises, matching what a ``console=False`` PyInstaller
+    build hands Python when no console is attached.
+    """
+
+    def write(self, _text: str) -> int:
+        return 0
+
+    def flush(self) -> None:
+        raise OSError(22, "Invalid argument")
+
+
+def test_attach_parent_console_attaches_when_stdout_is_present_but_broken(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A windowed build's ``sys.stdout`` is never ``None`` - it just can't flush.
+
+    Checking for ``None`` alone would miss this, which is exactly the bug
+    that shipped in the first 1.0.0 release build: ``--version`` printed
+    nothing because the unusable stream was mistaken for a working one.
+    """
+    monkeypatch.setattr(sys, "stdout", _BrokenStream())
+    monkeypatch.setattr(win32._kernel32, "AttachConsole", lambda _process_id: False)
+
+    assert win32.attach_parent_console() is False

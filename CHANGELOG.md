@@ -31,6 +31,12 @@ Le voci di dettaglio delle singole fasi restano sotto, da 0.8.0 a 0.1.0.
 
 - Le sotto-schede dell'editor (Modulo/JSON/Altre chiavi/Storico) riportavano
   alla Dashboard perché condividevano il selettore delle schede principali.
+- `UsageMonitorManager.exe --version` (e qualsiasi comando CLI) non stampava
+  nulla quando lo stdout ereditato era una console senza che il processo vi
+  fosse davvero "attaccato" (`--noconsole`): `write()` bufferizzava senza
+  errori, solo `flush()` falliva con `OSError: Invalid argument`. La verifica
+  ora prova a scrivere davvero, non si limita a controllare che lo stream non
+  sia `None`.
 
 ### Che cos'e'
 
