@@ -34,7 +34,8 @@ documentazione e versione 0.8.0 `d927115`.
 | B1d | 61 `help=` e ~90 messaggi della CLI, fixture `english_cli` nei moduli di test della CLI | `c7eee0f` |
 | B2 | `errors.py`, codici di uscita, `--debug`, traceback su `manager.log`, `@errors.guarded` | `220e72b` |
 | B3/B4 | `docs/architecture.md`, stub Linux verificato con test, README ridotto (489 -> ~120 righe) | `ea702b6` |
-| B5 | versione 1.0.0, CHANGELOG consolidato, build verificata | commit corrente |
+| B5 | versione 1.0.0, CHANGELOG consolidato, build verificata | `61e235b` |
+| B6 | finestra ridisegnata (sidebar, schede istanza, toast, tema, pannello Attività), inclusa nel changelog di 1.0.0 | `c17a2b4` |
 
 Catalogo: **421 chiavi** in entrambe le lingue, nessuna inutilizzata; i test
 statici verificano parita' delle chiavi, parita' dei segnaposto ed esistenza di

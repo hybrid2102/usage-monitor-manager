@@ -6,7 +6,13 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it/1.1.0/)
 e il progetto adotta il [Versionamento Semantico](https://semver.org/lang/it/).
 Ogni versione corrisponde a una fase del piano di sviluppo (`PLAN.md`, §7).
 
-## [Non rilasciato]
+## [1.0.0] - 2026-09-18
+
+Prima versione stabile. Consolida le fasi 0-8 del piano
+([PLAN.md](PLAN.md) §7) e **sostituisce i due strumenti precedenti**,
+`usage-monitor-updater` (PowerShell) e `usage-monitor-config-editor` (PySide6).
+
+Le voci di dettaglio delle singole fasi restano sotto, da 0.8.0 a 0.1.0.
 
 ### Modificato
 
@@ -25,14 +31,6 @@ Ogni versione corrisponde a una fase del piano di sviluppo (`PLAN.md`, §7).
 
 - Le sotto-schede dell'editor (Modulo/JSON/Altre chiavi/Storico) riportavano
   alla Dashboard perché condividevano il selettore delle schede principali.
-
-## [1.0.0] - 2026-09-18
-
-Prima versione stabile. Consolida le fasi 0-8 del piano
-([PLAN.md](PLAN.md) §7) e **sostituisce i due strumenti precedenti**,
-`usage-monitor-updater` (PowerShell) e `usage-monitor-config-editor` (PySide6).
-
-Le voci di dettaglio delle singole fasi restano sotto, da 0.8.0 a 0.1.0.
 
 ### Che cos'e'
 
