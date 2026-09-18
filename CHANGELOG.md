@@ -8,6 +8,68 @@ Ogni versione corrisponde a una fase del piano di sviluppo (`PLAN.md`, §7).
 
 ## [Non rilasciato]
 
+## [1.0.0] - 2026-09-18
+
+Prima versione stabile. Consolida le fasi 0-8 del piano
+([PLAN.md](PLAN.md) §7) e **sostituisce i due strumenti precedenti**,
+`usage-monitor-updater` (PowerShell) e `usage-monitor-config-editor` (PySide6).
+
+Le voci di dettaglio delle singole fasi restano sotto, da 0.8.0 a 0.1.0.
+
+### Che cos'e'
+
+Una tray app e una CLI (`umm`) che gestiscono la famiglia **Usage Monitor** -
+Claude (due istanze), Copilot, Codex - piu' qualsiasi eseguibile portabile
+aggiornato da GitHub Releases, `AgentMonitorForClaude.exe` incluso.
+
+### Contenuto
+
+- **Discovery** (fase 1): scan dei processi con collasso delle coppie
+  bootloader/app di PyInstaller, config dir da `--config-dir` -> env var ->
+  default con la sorgente registrata, suffisso di istanza identico a quello dei
+  monitor, replica della search order dei settings con i file "in ombra",
+  istanze dormienti da Run key, shortcut legacy, file di settings sparsi,
+  dichiarazioni dell'utente ed exe scan. `umm list [--json]`.
+- **Controllo processi** (fase 2): `stop` (app poi bootloader, attesa del
+  rilascio del mutex), `start` (staccato, senza finestra, `--config-dir`
+  sempre esplicito, ambiente ripulito dalle variabili `_PYI_*`), `restart` con
+  due secondi fra due istanze dello stesso exe.
+- **Aggiornamenti** (fase 3): un piano **per eseguibile**, changelog prima del
+  download, sha256 obbligatorio salvo conferma esplicita, swap con `.bak`,
+  riavvio delle sole istanze che erano attive, verifica post-avvio e rollback.
+- **Tray e finestra** (fase 4): menu dinamico con badge e notifiche, dashboard,
+  pagina aggiornamenti con changelog e progresso, import della configurazione
+  precedente al primo avvio, autostart del manager e delle istanze.
+- **Editor delle impostazioni** (fase 5): schema delle chiavi documentate dei
+  tre monitor, validazione con le regole del monitor **prima** di scrivere,
+  chiavi sconosciute conservate, storico datato con diff e ripristino,
+  export/import, copia fra istanze, preset brand. `umm config ...`.
+- **Self-update e robustezza** (fase 6): `umm self-update` (rename-swap e
+  rilancio con `--post-update`), token nel Windows Credential Manager,
+  `.umm-archive` con keep-N e ripristino di una qualsiasi build, canale
+  prerelease e "salta versione", watchdog (crash, duplicati, coppie orfane),
+  `umm update --all --yes --log` per il Task Scheduler.
+- **Estensioni** (fase 7): kind generico "exe da GitHub Releases" con
+  `umm kind add`, modalita' diagnostica (`--verbose` su file e viewer),
+  `status.json` per statusline e script, profili di avvio, hotkey globale.
+- **Rifinitura** (fase 8): interfaccia e CLI in **italiano e inglese**
+  (`preferences.language`, `auto` segue il locale di sistema), gerarchia di
+  errori unica con i codici di uscita documentati e i traceback solo con
+  `--debug`, `manager.log` rotante, guida utente e documento di architettura,
+  stub Linux documentato.
+
+### Sicurezza
+
+Le invarianti sono elencate in [docs/architecture.md](docs/architecture.md): si
+termina solo un PID il cui eseguibile coincide, "fermata" significa mutex
+rilasciato, l'ambiente del figlio e' sempre ripulito, ogni scrittura di un file
+dell'utente e' atomica e lascia un `.bak`, il token non passa mai da `argv`.
+
+### Requisiti
+
+Windows 10/11, Python 3.12+ per l'uso da sorgente; l'eseguibile congelato non
+richiede nulla.
+
 ## [0.8.0] - 2026-09-18
 
 Fase 7 - estensioni. Il manager non gestisce piu' solo i tre monitor: sa
@@ -318,7 +380,8 @@ Fase 0 — scheletro.
   pre-commit, CI su `windows-latest`, registro dei tipi di monitor
   (`kinds.py`), modello di dominio (`model.py`) e README in italiano.
 
-[Non rilasciato]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.8.0...HEAD
+[Non rilasciato]: https://github.com/hybrid2102/usage-monitor-manager/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.8.0...v1.0.0
 [0.8.0]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/hybrid2102/usage-monitor-manager/compare/v0.5.0...v0.6.0
