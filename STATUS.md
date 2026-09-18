@@ -2,7 +2,10 @@
 
 Aggiornato: 2026-09-18. Riferimento: [PLAN.md](PLAN.md) §7.
 
-## Tutte le fasi completate — versione **1.0.0** su `main`, nulla pushato, nessun tag
+## Versione **1.0.0** pubblicata
+
+[v1.0.0](https://github.com/hybrid2102/usage-monitor-manager/releases/tag/v1.0.0)
+su GitHub Releases, con `UsageMonitorManager.exe` e `.sha256`.
 
 | Fase | Contenuto | Versione |
 |---|---|---|
@@ -36,6 +39,8 @@ documentazione e versione 0.8.0 `d927115`.
 | B3/B4 | `docs/architecture.md`, stub Linux verificato con test, README ridotto (489 -> ~120 righe) | `ea702b6` |
 | B5 | versione 1.0.0, CHANGELOG consolidato, build verificata | `61e235b` |
 | B6 | finestra ridisegnata (sidebar, schede istanza, toast, tema, pannello Attività), inclusa nel changelog di 1.0.0 | `c17a2b4` |
+| B7 | fix `attach_parent_console` (stdout non-`None` ma non scrivibile: `--version` non stampava nulla su build `--noconsole`), scoperto dallo smoke test della release | `7a4dbbb` |
+| B8 | smoke test della CI passato a `Start-Process -RedirectStandardOutput` (la cattura `(& $exe) -join ""` di PowerShell non dà uno stdout scrivibile a un exe `--noconsole`) | `97de391` |
 
 Catalogo: **421 chiavi** in entrambe le lingue, nessuna inutilizzata; i test
 statici verificano parita' delle chiavi, parita' dei segnaposto ed esistenza di
@@ -56,19 +61,7 @@ Build verificata in questo worktree:
 1. **Prova manuale della tray e della finestra.** Le fasi 5-8 sono verificate a
    livello API e di test, non cliccando: menu, notifiche, le cinque pagine,
    editor delle impostazioni, profili, diagnostica, hotkey.
-2. **Tag, push e release.** Nessuno di questi comandi e' stato eseguito:
-
-   ```powershell
-   cd D:\Repos\hybrid2102\usage-monitor-manager
-   git log --oneline -12                     # rilettura dei commit prima di pubblicare
-   git tag -a v1.0.0 -m "Usage Monitor Manager 1.0.0"
-   git push origin main
-   git push origin v1.0.0                    # il workflow release.yml ricostruisce e pubblica
-   gh run watch                              # opzionale: segue la build di release
-   gh release view v1.0.0                    # verifica exe + .sha256 allegati
-   ```
-
-3. **Archiviazione dei due repo vecchi**, dopo che la 1.0 e' pubblicata: i
+2. **Archiviazione dei due repo vecchi**, ora che la 1.0 e' pubblicata: i
    README di rimando sono preparati in `docs/deprecation/` (scritti in un
    worktree separato). Applicarli e poi archiviare:
 
@@ -77,7 +70,7 @@ Build verificata in questo worktree:
    gh repo edit hybrid2102/usage-monitor-config-editor --archived
    ```
 
-4. **Preferenze da decidere al primo avvio reale**: lingua (`it` per default,
+3. **Preferenze da decidere al primo avvio reale**: lingua (`it` per default,
    `auto` segue il locale di sistema), autostart del manager, `status_file` se
    si vuole alimentare la statusline, `hotkey`.
 
