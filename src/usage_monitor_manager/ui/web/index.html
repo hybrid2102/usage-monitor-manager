@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Usage Monitor Manager</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="bars" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>Usage Monitor Manager</span>
+        <span class="version" id="header-version"></span>
+      </div>
+      <nav class="tabs" role="tablist">
+        <button class="tab" data-page="dashboard" role="tab">Dashboard</button>
+        <button class="tab" data-page="updates" role="tab">Aggiornamenti</button>
+        <button class="tab" data-page="manager" role="tab">Manager</button>
+      </nav>
+      <div class="topbar-actions">
+        <button class="btn" id="btn-refresh">Aggiorna elenco</button>
+        <button class="btn primary" id="btn-check">Controlla aggiornamenti</button>
+      </div>
+    </header>
+
+    <main>
+      <!-- ------------------------------------------------ Dashboard -->
+      <section class="page" id="page-dashboard">
+        <div class="bar">
+          <h1>Istanze</h1>
+          <div class="group">
+            <button class="btn" data-bulk="restart_all">Riavvia tutte</button>
+            <button class="btn" data-bulk="stop_all">Ferma tutte</button>
+            <button class="btn" data-bulk="start_missing">Avvia mancanti</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="instances">
+            <thead>
+              <tr>
+                <th>Tipo</th>
+                <th>Etichetta</th>
+                <th>Config dir</th>
+                <th>Locale</th>
+                <th>Remota</th>
+                <th>Data exe</th>
+                <th>PID</th>
+                <th>Uptime</th>
+                <th>Settings attivo</th>
+                <th>Autostart</th>
+                <th class="actions-col">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="instances-body">
+              <tr class="empty"><td colspan="11">Caricamento&hellip;</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hint" id="dashboard-hint"></p>
+
+        <div class="panel" id="settings-panel" hidden>
+          <div class="bar">
+            <h2 id="settings-title">Impostazioni</h2>
+            <button class="btn" id="settings-close">Chiudi</button>
+          </div>
+          <p class="hint">
+            Sola lettura: l&rsquo;editor con i campi validati arriva nella fase 5.
+            Il file mostrato &egrave; quello che il monitor sta effettivamente usando.
+          </p>
+          <p class="mono" id="settings-path"></p>
+          <p class="hint" id="settings-shadow"></p>
+          <pre class="code-block" id="settings-raw"></pre>
+        </div>
+      </section>
+
+      <!-- --------------------------------------------- Aggiornamenti -->
+      <section class="page" id="page-updates">
+        <div class="bar">
+          <h1>Aggiornamenti</h1>
+          <span class="hint" id="updates-status"></span>
+        </div>
+        <div class="split">
+          <aside class="list" id="updates-list"></aside>
+          <div class="detail">
+            <div id="update-detail-empty" class="hint">Seleziona un eseguibile per vedere il changelog.</div>
+            <div id="update-detail" hidden>
+              <div class="bar">
+                <h2 id="update-title"></h2>
+                <div class="group">
+                  <button class="btn primary" id="btn-apply">Aggiorna</button>
+                  <button class="btn danger" id="btn-rollback">Rollback</button>
+                </div>
+              </div>
+              <p class="hint" id="update-meta"></p>
+              <div class="progress" id="progress" hidden><div class="progress-fill" id="progress-fill"></div></div>
+              <article class="markdown" id="changelog"></article>
+            </div>
+            <h3>Log operazione</h3>
+            <pre class="code-block log" id="update-log"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- --------------------------------------------------- Manager -->
+      <section class="page" id="page-manager">
+        <h1>Manager</h1>
+        <div class="cards">
+          <div class="panel">
+            <h2>Versione</h2>
+            <p class="mono" id="manager-version"></p>
+            <p class="hint" id="manager-exe"></p>
+            <p class="hint mono" id="manager-config-path"></p>
+          </div>
+          <div class="panel">
+            <h2>Preferenze</h2>
+            <label class="row">
+              <input type="checkbox" id="pref-autostart" />
+              <span>Avvia il manager con Windows</span>
+            </label>
+            <label class="row">
+              <input type="checkbox" id="pref-notify" />
+              <span>Notifica gli aggiornamenti</span>
+            </label>
+            <label class="row">
+              <input type="checkbox" id="pref-prerelease" />
+              <span>Considera le prerelease</span>
+            </label>
+            <label class="row">
+              <span>Controlla ogni</span>
+              <input type="number" id="pref-interval" min="1" max="168" />
+              <span>ore</span>
+            </label>
+          </div>
+          <div class="panel">
+            <h2>GitHub</h2>
+            <p id="github-token"></p>
+            <p class="hint" id="github-rate"></p>
+            <p class="hint">
+              L&rsquo;inserimento del token (Credential Manager) arriva nella fase 6.
+            </p>
+          </div>
+          <div class="panel">
+            <h2>Importazione configurazione precedente</h2>
+            <div class="group">
+              <button class="btn" id="btn-import-dry">Anteprima</button>
+              <button class="btn primary" id="btn-import">Importa</button>
+            </div>
+            <pre class="code-block log" id="import-log"></pre>
+          </div>
+        </div>
+        <h2>Log</h2>
+        <pre class="code-block log" id="manager-log"></pre>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

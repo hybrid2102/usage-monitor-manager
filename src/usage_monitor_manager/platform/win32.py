@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, cast
 
 __all__ = [
+    "ATTACH_PARENT_PROCESS",
     "CREATE_NO_WINDOW",
     "DEFAULT_RUN_ROOT",
     "DETACHED_PROCESS",
@@ -32,6 +33,7 @@ __all__ = [
     "RUN_KEY_PATH",
     "MutexHolder",
     "RegistryRoot",
+    "attach_parent_console",
     "authenticode_status",
     "delete_run_key",
     "file_product_name",
@@ -419,6 +421,40 @@ def read_shortcuts(paths: Sequence[Path]) -> dict[Path, tuple[Path | None, list[
     return result
 
 
+ATTACH_PARENT_PROCESS = -1
+"""``AttachConsole`` argument meaning "the console of the parent process"."""
+
+
+def attach_parent_console() -> bool:
+    """Reattach stdout/stderr to the console that launched a windowed build.
+
+    ``UsageMonitorManager.exe`` is built with ``--noconsole`` because it is a
+    tray application: Windows gives it no console, and everything the CLI
+    prints would go nowhere. When it is nevertheless started **from** a console
+    (``UsageMonitorManager.exe list``), ``AttachConsole(-1)`` borrows the
+    parent's console and the standard streams are reopened onto ``CONOUT$`` /
+    ``CONIN$``, so the packaged executable behaves exactly like ``umm``.
+
+    Returns ``True`` when a console is now attached. Never raises: a build
+    started from Explorer simply has no parent console and keeps its null
+    streams.
+    """
+    if sys.platform != "win32":  # pragma: no cover - the dispatcher never gets here
+        return False
+    try:
+        if not _kernel32.AttachConsole(ATTACH_PARENT_PROCESS):
+            return False
+    except OSError:  # pragma: no cover - defensive
+        return False
+    for name, path, mode in (("stdout", "CONOUT$", "w"), ("stderr", "CONOUT$", "w"), ("stdin", "CONIN$", "r")):
+        try:
+            stream = open(path, mode, encoding="utf-8", errors="replace", buffering=1)  # noqa: SIM115, PTH123
+        except OSError:  # pragma: no cover - a redirected stream stays as it is
+            continue
+        setattr(sys, name, stream)
+    return True
+
+
 def no_window_popen_kwargs() -> dict[str, Any]:
     """``Popen`` keyword arguments that keep any console window hidden."""
     if sys.platform != "win32":  # pragma: no cover - the dispatcher never gets here
@@ -435,6 +471,8 @@ def no_window_popen_kwargs() -> dict[str, Any]:
 
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
+_kernel32.AttachConsole.argtypes = [wintypes.DWORD]
+_kernel32.AttachConsole.restype = wintypes.BOOL
 _kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
 _kernel32.CreateMutexW.restype = wintypes.HANDLE
 _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]

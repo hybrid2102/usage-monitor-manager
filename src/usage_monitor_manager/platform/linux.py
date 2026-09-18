@@ -17,6 +17,7 @@ __all__ = [
     "MANAGER_RUN_NAME",
     "MutexHolder",
     "RegistryRoot",
+    "attach_parent_console",
     "authenticode_status",
     "delete_run_key",
     "file_product_name",
@@ -144,6 +145,11 @@ class MutexHolder:
 def hold_mutex(name: str) -> MutexHolder | None:
     """A held ``flock`` would play this role (PLAN.md section 9.12)."""
     _unsupported()
+
+
+def attach_parent_console() -> bool:
+    """A POSIX process already inherits its parent's terminal."""
+    return True
 
 
 def no_window_popen_kwargs() -> dict[str, Any]:

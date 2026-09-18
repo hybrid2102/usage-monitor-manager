@@ -4,9 +4,89 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: write
+
 jobs:
-  placeholder:
+  build:
     runs-on: windows-latest
     steps:
-      - name: Not yet implemented
-        run: echo "build in Phase 4"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Checks
+        run: |
+          ruff check .
+          ruff format --check .
+          pyright
+          pytest
+
+      - name: Verify that the tag matches __version__
+        shell: pwsh
+        run: |
+          $version = python -c "import usage_monitor_manager as m; print(m.__version__)"
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          if ($version -ne $tag) {
+            Write-Error "tag $tag does not match __version__ $version"
+            exit 1
+          }
+          Write-Host "building $version"
+
+      - name: Build
+        run: python build.py --clean --sha
+
+      - name: Smoke test the executable
+        shell: pwsh
+        run: |
+          $exe = "dist\UsageMonitorManager.exe"
+          $printed = (& $exe --version) -join ""
+          $pe = (Get-Item $exe).VersionInfo.ProductVersion
+          Write-Host "--version: $printed"
+          Write-Host "PE ProductVersion: $pe"
+          if (-not $printed) { Write-Error "the executable printed no version"; exit 1 }
+          if (-not $pe) { Write-Error "the executable carries no PE ProductVersion"; exit 1 }
+
+      - name: Extract the changelog section
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          $lines = Get-Content CHANGELOG.md
+          $start = ($lines | Select-String -Pattern "^## \[$([regex]::Escape($tag))\]" | Select-Object -First 1).LineNumber
+          if (-not $start) {
+            "Nessuna sezione di changelog per $tag." | Set-Content notes.md
+          } else {
+            $rest = $lines[$start..($lines.Count - 1)]
+            $end = ($rest | Select-String -Pattern "^## \[" | Select-Object -First 1).LineNumber
+            $body = if ($end) { $rest[0..($end - 2)] } else { $rest }
+            $body | Set-Content notes.md -Encoding utf8
+          }
+          Get-Content notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UsageMonitorManager
+          path: |
+            dist/UsageMonitorManager.exe
+            dist/UsageMonitorManager.exe.sha256
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release create "${{ github.ref_name }}"
+          "dist/UsageMonitorManager.exe"
+          "dist/UsageMonitorManager.exe.sha256"
+          --verify-tag
+          --title "${{ github.ref_name }}"
+          --notes-file notes.md

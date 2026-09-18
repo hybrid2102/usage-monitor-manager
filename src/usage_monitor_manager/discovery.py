@@ -41,8 +41,10 @@ __all__ = [
     "ProcessSnapshot",
     "discover",
     "discover_instances",
+    "kind_for_config_dir_name",
     "scan_processes",
     "settings_candidates",
+    "shortcut_paths",
 ]
 
 SETTINGS_FILENAME = "usage-monitor-settings.json"
@@ -322,7 +324,7 @@ def _drafts_from_run_entries(
     return drafts
 
 
-def _shortcut_paths(exe_dirs: Iterable[Path]) -> list[Path]:
+def shortcut_paths(exe_dirs: Iterable[Path]) -> list[Path]:
     """Legacy convention of the PowerShell updater: ``<exe> - <label>.lnk``."""
     prefixes = tuple(f"{kind.exe_name.casefold()} - " for kind in kinds.all_kinds())
     prefixes += tuple(f"{kind.exe_stem.casefold()} - " for kind in kinds.all_kinds())
@@ -341,7 +343,7 @@ def _shortcut_paths(exe_dirs: Iterable[Path]) -> list[Path]:
 
 
 def _drafts_from_shortcuts(exe_dirs: Iterable[Path], resolve_kind: _KindResolver) -> list[_Draft]:
-    links = _shortcut_paths(exe_dirs)
+    links = shortcut_paths(exe_dirs)
     if not links:
         return []
     drafts: list[_Draft] = []
@@ -381,7 +383,7 @@ def _settings_roots() -> list[Path]:
     return unique
 
 
-def _kind_for_config_dir_name(name: str) -> MonitorKind | None:
+def kind_for_config_dir_name(name: str) -> MonitorKind | None:
     """Guess the kind from a config directory name (``.claude-valeria``)."""
     folded = name.casefold()
     best: MonitorKind | None = None
@@ -407,7 +409,7 @@ def _drafts_from_settings_files(exe_by_kind: Mapping[str, Path]) -> list[_Draft]
         for child in children:
             if not _exists(child / SETTINGS_FILENAME):
                 continue
-            kind = _kind_for_config_dir_name(child.name)
+            kind = kind_for_config_dir_name(child.name)
             if kind is None:
                 continue
             drafts.append(

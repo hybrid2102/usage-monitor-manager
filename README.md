@@ -58,16 +58,107 @@ umm rollback --kind copilot [--no-restart] [--json]
 umm config show|edit|validate|set KEY VALUE --instance ...
 umm self-update [--check-only]
 umm status [--json]
+umm tray
+umm import-legacy [--dry-run] [--json]
+umm autostart --manager [on|off|status] [--json]
+umm autostart --instance ID [on|off|status] [--json]
 ```
 
-Senza argomenti, `python -m usage_monitor_manager` avvia la modalità tray.
+Senza argomenti, `python -m usage_monitor_manager` avvia la modalità tray
+(`umm tray` fa lo stesso; `--tray`, la forma scritta nella Run key secondo
+PLAN.md §6.5, è accettata come alias).
+
+### Tray
+
+L'icona nella system tray è il punto d'ingresso quotidiano. Il menu viene
+ricostruito a ogni apertura e mostra:
+
+```
+Claude · ~/.claude          1.22.0  ● in esecuzione        ▸ Riavvia | Ferma | Avvia | Impostazioni… | Apri cartella
+Claude Valeria · ~/.claude-valeria  1.22.0  ● in esecuzione ▸ …
+Copilot · ~/.copilot        0.3.1   ● in esecuzione  ↑ 0.3.2 disponibile ▸ … | Aggiorna a 0.3.2…
+Codex · ~/.codex            0.1.0   ○ non in esecuzione     ▸ Avvia | …
+---
+Riavvia tutte · Ferma tutte · Avvia mancanti
+Controlla aggiornamenti (ultimo: 12:40)
+Apri Manager…
+---
+Manager 0.5.0 · Esci
+```
+
+L'icona porta un badge con il numero di aggiornamenti disponibili (o `!` se
+l'ultimo controllo è fallito) e le notifiche di Windows annunciano ogni nuova
+release una volta sola. Il manager è singleton (mutex
+`UsageMonitorManager_SingleInstance`): avviarlo una seconda volta stampa un
+avviso ed esce.
+
+### Finestra
+
+«Apri Manager…» apre la finestra pywebview (tema scuro coerente con i popup dei
+monitor). Viene creata una sola volta e nascosta alla chiusura, così
+riaprirla è istantaneo. Tre pagine:
+
+- **Dashboard** — tabella con tipo, etichetta, config dir, versione locale e
+  remota, data dell'exe, PID, uptime, file di impostazioni attivo e toggle di
+  autostart; per riga: Riavvia / Ferma / Avvia / Impostazioni / Cartella e,
+  quando serve, Aggiorna. Il pannello «Impostazioni» mostra per ora il JSON in
+  **sola lettura** (l'editor con i campi validati è la Fase 5).
+- **Aggiornamenti** — changelog della release reso da un renderer markdown
+  inline, barra di progresso del download, log degli eventi dell'update e i
+  pulsanti «Aggiorna» e «Rollback».
+- **Manager** — versione, preferenze (avvio con Windows, notifiche,
+  prerelease, intervallo di controllo), **presenza** del token GitHub e stato
+  del rate limit, importazione della configurazione precedente e log.
+
+Nota di architettura: pywebview possiede il **main thread** e pystray gira su
+un thread di servizio, il contrario di quello che fanno i monitor. Il motivo è
+documentato in `ui/window.py`: la finestra del manager è persistente, quindi il
+loop che la possiede dev'essere quello principale del processo.
+
+### Configurazione e importazione
+
+Lo stato del manager vive in
+`%LOCALAPPDATA%\UsageMonitorManager\manager-config.json` (salvataggio atomico
+con `.bak`): istanze dichiarate ed etichettate, preferenze, `last_check` per
+repo e `skipped_versions`. Al primo avvio il manager importa una sola volta la
+configurazione precedente — shortcut `<exe> - *.lnk`, voci `HKCU\...\Run` e
+`profiles.json` del vecchio config editor — proponendo le etichette:
+
+```
+> umm import-legacy --dry-run
+umm import-legacy --dry-run: nessuna modifica verra' scritta
+  [profiles] Claude: C:\Users\Marco\.claude  (profiles.json (Claude))
+  [profiles] Claude Valeria: C:\Users\Marco\.claude-valeria  (profiles.json (Claude Valeria))
+  [profiles] Copilot: C:\Users\Marco\.copilot  (profiles.json (Copilot))
+  [profiles] Codex: C:\Users\Marco\.codex  (profiles.json (Codex))
+da aggiungere: 4
+```
+
+Nulla viene rimosso o modificato nelle sorgenti legacy: il manager le legge e
+basta.
+
+### Build
+
+```powershell
+.\.venv\Scripts\python build.py --clean --sha
+```
+
+Produce `dist\UsageMonitorManager.exe` (PyInstaller onefile, senza console,
+asset `ui/web` inclusi, icona generata da `tools/generate_icon.py` e
+`version_info.py` generato da `__version__`, così la `ProductVersion` del PE è
+leggibile come per i monitor). Su tag `v*` il workflow di release ricostruisce
+tutto su `windows-latest` e pubblica l'exe con il suo `.sha256`, usando la
+sezione corrispondente di `CHANGELOG.md` come note.
 
 ## Stato
 
-**Fase 3 (Update engine) completata** (`v0.4.0`). **Da qui
-`usage-monitor-updater` (PowerShell) è sostituibile**: confronto versioni,
+**Fase 4 (Tray + dashboard) completata** (`v0.5.0`): il manager ha ora una
+tray, una finestra, il controllo aggiornamenti periodico, la gestione
+dell'autostart e una pipeline di build/release. Dalla fase precedente
+**`usage-monitor-updater` (PowerShell) è sostituibile**: confronto versioni,
 changelog, download verificato, swap con `.bak`, riavvio delle istanze e
-rollback sono coperti da `umm check` / `umm update` / `umm rollback`.
+rollback sono coperti da `umm check` / `umm update` / `umm rollback` e dalla
+pagina Aggiornamenti.
 
 Oltre allo scheletro della Fase 0 (`kinds.py`, `model.py`, `identity.py`,
 tooling, CI) sono reali e testati:
@@ -187,6 +278,27 @@ E l'anteprima di un aggiornamento, che non tocca nulla:
   would check after 5s that the instances run and the PE version is 0.3.2, then delete the .bak
 ```
 
-I moduli delle fasi successive (tray/dashboard, editor impostazioni,
-self-update, watchdog, archivio) sono ancora stub con docstring di
-responsabilità e sono descritti in PLAN.md §7.
+Dalla Fase 4 sono inoltre reali e testati:
+
+- `manager_config.py` — `manager-config.json` con salvataggio atomico e `.bak`,
+  validazione tollerante di ogni campo, conservazione delle chiavi sconosciute
+  e istanze dichiarate dall'utente (sorgente «d» della discovery, §6.1, da cui
+  arrivano le etichette);
+- `scheduler.py` — controllo periodico (30 s dopo l'avvio, poi ogni
+  `check_interval_hours`), stato in memoria per la UI, `last_check` per repo,
+  una sola notifica per `(repo, tag)` e rispetto di `skipped_versions`;
+  orologio, attesa e provider dei piani sono iniettabili;
+- `legacy.py` — importazione una tantum da shortcut, Run key e `profiles.json`,
+  con etichette suggerite (`.claude-valeria` → «Claude Valeria») e report
+  identico fra `--dry-run` ed esecuzione reale;
+- `ui/tray.py` — menu dinamico, badge, notifiche, operazioni su thread di
+  lavoro e singleton via mutex;
+- `ui/window.py` + `ui/web/` — `JsApi` (client puro dei moduli core, testato
+  senza webview) e la UI a tre pagine;
+- autostart — `set_manager_autostart` / `sync_manager_autostart_path` per il
+  manager e `process_control.set_instance_autostart` per le istanze, con la
+  radice di registro iniettabile (i test non toccano mai `HKCU\...\Run`).
+
+I moduli delle fasi successive (editor impostazioni, self-update, watchdog,
+archivio, storico) sono ancora stub con docstring di responsabilità e sono
+descritti in PLAN.md §7.

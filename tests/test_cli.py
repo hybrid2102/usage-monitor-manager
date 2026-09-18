@@ -27,6 +27,7 @@ from usage_monitor_manager.cli import (
     select_instances,
 )
 from usage_monitor_manager.kinds import get_kind
+from usage_monitor_manager.manager_config import DeclaredInstance
 from usage_monitor_manager.model import Instance, ProcessPair
 
 CLAUDE_EXE = r"D:\Tools\UsageMonitorForClaude.exe"
@@ -128,9 +129,21 @@ def test_repeatable_selectors_accumulate() -> None:
     assert args.dry_run is False
 
 
-def test_module_entry_without_args_is_tray_placeholder(capsys: pytest.CaptureFixture[str]) -> None:
+def test_module_entry_without_args_runs_the_tray(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No arguments means the tray - which is stubbed here, never started."""
+    called: list[str] = []
+    monkeypatch.setattr("usage_monitor_manager.ui.tray.run_tray", lambda *a, **k: called.append("tray") or 0)
     assert __main__.main([]) == 0
-    assert capsys.readouterr().out.strip() == "tray not implemented yet"
+    assert called == ["tray"]
+
+
+def test_tray_subcommand_and_the_legacy_flag_are_the_same_thing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PLAN.md section 6.5 writes ``--tray``; the CLI exposes ``tray``."""
+    calls: list[str] = []
+    monkeypatch.setattr("usage_monitor_manager.ui.tray.run_tray", lambda *a, **k: calls.append("tray") or 0)
+    assert main(["tray"]) == 0
+    assert main(["--tray"]) == 0
+    assert calls == ["tray", "tray"]
 
 
 def test_module_entry_with_args_dispatches_to_cli() -> None:
@@ -414,3 +427,137 @@ def test_restart_reports_stops_then_starts(monkeypatch: pytest.MonkeyPatch, caps
         "ok   stop claude: stopped",
         "ok   start claude: started (10/11)",
     ]
+
+
+# --------------------------------------------------------------------------- #
+# umm import-legacy / umm autostart (Phase 4)
+# --------------------------------------------------------------------------- #
+
+
+def test_import_legacy_dry_run_prints_the_report(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from usage_monitor_manager import legacy
+
+    captured: dict[str, object] = {}
+
+    def fake_import(**kwargs: object) -> legacy.ImportReport:
+        captured.update(kwargs)
+        return legacy.ImportReport(
+            findings=(
+                legacy.LegacyFinding(
+                    kind="claude",
+                    config_dir=Path(r"C:\Users\Marco\.claude-valeria"),
+                    label="Claude Valeria",
+                    source="shortcut",
+                    detail="UsageMonitorForClaude.exe - valeria.lnk",
+                ),
+            ),
+            added=(DeclaredInstance(kind="claude", config_dir=Path(r"C:\x\.claude-valeria"), label="Claude Valeria"),),
+        )
+
+    monkeypatch.setattr(legacy, "import_legacy", fake_import)
+    assert main(["import-legacy", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert captured == {"dry_run": True}
+    assert "nessuna modifica verra' scritta" in out
+    assert "[shortcut] Claude Valeria" in out
+    assert "da aggiungere: 1" in out
+
+
+def test_import_legacy_json(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    from usage_monitor_manager import legacy
+
+    monkeypatch.setattr(legacy, "import_legacy", lambda **kwargs: legacy.ImportReport(applied=True))
+    assert main(["import-legacy", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["applied"] is True
+    assert payload["total_found"] == 0
+
+
+def test_autostart_manager_status(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    from usage_monitor_manager import platform as platform_module
+
+    monkeypatch.setattr(platform_module, "get_manager_autostart", lambda root=None: None)
+    assert main(["autostart", "--manager"]) == 0
+    assert "avvio con Windows: no" in capsys.readouterr().out
+
+
+def test_autostart_manager_on_and_off(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    from usage_monitor_manager import platform as platform_module
+
+    written: list[bool] = []
+    monkeypatch.setattr(
+        platform_module,
+        "set_manager_autostart",
+        lambda enabled, cmd=None, root=None: (written.append(enabled), '"x" tray' if enabled else None)[1],
+    )
+    assert main(["autostart", "--manager", "on"]) == 0
+    assert main(["autostart", "--manager", "off"]) == 0
+    assert written == [True, False]
+    out = capsys.readouterr().out
+    assert 'avvio con Windows: si ("x" tray)' in out
+    assert "avvio con Windows: no" in out
+
+
+def test_autostart_manager_json(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    from usage_monitor_manager import platform as platform_module
+
+    monkeypatch.setattr(platform_module, "get_manager_autostart", lambda root=None: '"x" tray')
+    assert main(["autostart", "--manager", "status", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"target": "manager", "enabled": True, "command": '"x" tray'}
+
+
+def test_autostart_manager_reports_a_registry_failure(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from usage_monitor_manager import platform as platform_module
+
+    def boom(enabled: bool, cmd: object = None, root: object = None) -> None:
+        raise OSError("accesso negato")
+
+    monkeypatch.setattr(platform_module, "set_manager_autostart", boom)
+    assert main(["autostart", "--manager", "on"]) == EXIT_FAILED
+    assert "accesso negato" in capsys.readouterr().err
+
+
+def test_autostart_instance(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from usage_monitor_manager import process_control
+
+    _discovery(monkeypatch, _instances())
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        process_control,
+        "set_instance_autostart",
+        lambda instance, enabled, root=None: (calls.append((instance.instance_id, enabled)), '"x"')[1],
+    )
+    assert main(["autostart", "--instance", "claude", "on"]) == 0
+    assert calls == [("claude", True)]
+    assert 'claude: avvio con Windows: si ("x")' in capsys.readouterr().out
+
+
+def test_autostart_instance_status(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    from usage_monitor_manager import process_control
+
+    _discovery(monkeypatch, _instances())
+    monkeypatch.setattr(process_control, "get_instance_autostart", lambda instance, root=None: None)
+    assert main(["autostart", "--instance", "claude"]) == 0
+    assert "avvio con Windows: no" in capsys.readouterr().out
+
+
+def test_autostart_unknown_instance(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    _discovery(monkeypatch, _instances())
+    assert main(["autostart", "--instance", "ghost", "on"]) == EXIT_NO_MATCH
+    assert "nessuna istanza" in capsys.readouterr().err
+
+
+def test_autostart_requires_a_target() -> None:
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["autostart", "on"])
+    assert exc.value.code == 2

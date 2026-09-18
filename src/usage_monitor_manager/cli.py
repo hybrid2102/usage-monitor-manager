@@ -2,10 +2,11 @@
 
 The CLI is the primary consumer of the core modules: tray and window are
 clients of the same functions. Implemented so far: ``--version``, ``list``
-(Phase 1), ``restart`` / ``stop`` / ``start`` (Phase 2) and
-``check`` / ``update`` / ``rollback`` (Phase 3). The remaining subcommands are
-wired up - so the surface is frozen and testable - and exit with
-``EXIT_NOT_IMPLEMENTED``.
+(Phase 1), ``restart`` / ``stop`` / ``start`` (Phase 2),
+``check`` / ``update`` / ``rollback`` (Phase 3) and
+``tray`` / ``import-legacy`` / ``autostart`` (Phase 4). The remaining
+subcommands are wired up - so the surface is frozen and testable - and exit
+with ``EXIT_NOT_IMPLEMENTED``.
 
 ``umm update`` prints the release notes *before* the download starts and then
 redraws a single progress line in place, so the changelog stays readable for
@@ -73,6 +74,7 @@ EXIT_UPDATES_AVAILABLE = 10
 
 _KIND_CHOICES = ("claude", "copilot", "codex")
 _PROCESS_COMMANDS = ("restart", "stop", "start")
+_AUTOSTART_ACTIONS = ("on", "off", "status")
 
 
 def _add_selection(parser: argparse.ArgumentParser) -> None:
@@ -174,6 +176,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="health summary for scripts and statuslines")
     _add_json(status)
+
+    subparsers.add_parser("tray", help="run the tray icon (the default when started with no arguments)")
+
+    import_legacy = subparsers.add_parser(
+        "import-legacy",
+        help="import shortcuts, Run entries and the old config editor's profiles",
+    )
+    import_legacy.add_argument("--dry-run", action="store_true", help="print what would be imported, change nothing")
+    _add_json(import_legacy)
+
+    autostart = subparsers.add_parser("autostart", help="inspect or change autostart with Windows")
+    target = autostart.add_mutually_exclusive_group(required=True)
+    target.add_argument("--manager", nargs="?", const="status", choices=_AUTOSTART_ACTIONS, metavar="ACTION")
+    target.add_argument("--instance", metavar="ID", help="instance id (see 'umm list')")
+    autostart.add_argument(
+        "action",
+        nargs="?",
+        choices=_AUTOSTART_ACTIONS,
+        default="status",
+        help="on | off | status (default: status)",
+    )
+    _add_json(autostart)
 
     return parser
 
@@ -688,14 +712,119 @@ def _cmd_rollback(args: argparse.Namespace) -> int:
     return EXIT_FAILED if failed else 0
 
 
+# --------------------------------------------------------------------------- #
+# Phase 4: tray, legacy import, autostart
+# --------------------------------------------------------------------------- #
+
+
+def _cmd_tray() -> int:
+    from .ui.tray import run_tray
+
+    return run_tray()
+
+
+def _cmd_import_legacy(args: argparse.Namespace) -> int:
+    from .legacy import import_legacy
+
+    report = import_legacy(dry_run=bool(args.dry_run))
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        if args.dry_run:
+            print("umm import-legacy --dry-run: nessuna modifica verra' scritta")
+        for line in report.lines():
+            print(line)
+    return 0
+
+
+def _autostart_payload(name: str, command: str | None) -> JsonDict:
+    return {"target": name, "enabled": command is not None, "command": command}
+
+
+def _cmd_autostart_manager(action: str, as_json: bool) -> int:
+    from .platform import get_manager_autostart, set_manager_autostart
+
+    if action == "status":
+        command = get_manager_autostart()
+    else:
+        try:
+            command = set_manager_autostart(action == "on")
+        except OSError as error:
+            print(f"umm autostart: {error}", file=sys.stderr)
+            return EXIT_FAILED
+    if as_json:
+        print(json.dumps(_autostart_payload("manager", command), indent=2))
+    else:
+        state = f"si ({command})" if command else "no"
+        print(f"manager: avvio con Windows: {state}")
+    return 0
+
+
+def _cmd_autostart_instance(instance_id: str, action: str, as_json: bool) -> int:
+    from . import process_control
+    from .discovery import discover
+
+    wanted = _normalize_instance_id(instance_id)
+    matches = [i for i in discover() if _normalize_instance_id(i.instance_id) == wanted]
+    if not matches:
+        print(f"umm autostart: nessuna istanza con id {instance_id!r}", file=sys.stderr)
+        return EXIT_NO_MATCH
+    instance = matches[0]
+    try:
+        if action == "status":
+            command = process_control.get_instance_autostart(instance)
+        else:
+            command = process_control.set_instance_autostart(instance, action == "on")
+    except (OSError, ValueError) as error:
+        print(f"umm autostart: {error}", file=sys.stderr)
+        return EXIT_FAILED
+    if as_json:
+        print(json.dumps(_autostart_payload(instance.instance_id, command), indent=2))
+    else:
+        state = f"si ({command})" if command else "no"
+        print(f"{instance.instance_id}: avvio con Windows: {state}")
+    return 0
+
+
+def _cmd_autostart(args: argparse.Namespace) -> int:
+    as_json = bool(args.json)
+    if args.instance:
+        return _cmd_autostart_instance(args.instance, args.action, as_json)
+    action = args.manager if args.manager != "status" else args.action
+    return _cmd_autostart_manager(action, as_json)
+
+
+def _attach_console_if_frozen(args: Sequence[str]) -> None:
+    """A windowed build asked to run a CLI command borrows the caller's console.
+
+    ``UsageMonitorManager.exe`` is built with ``--noconsole`` (it is a tray
+    app), so without this ``UsageMonitorManager.exe --version`` would print
+    into the void. The tray path deliberately does not attach: starting the
+    tray from Explorer must not pop a console up.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    if not args or args[0] in ("tray", "--tray"):
+        return
+    from .platform import attach_parent_console
+
+    attach_parent_console()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for the ``umm`` console script."""
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    _attach_console_if_frozen(raw_args)
     reconfigure_stdout()
     parser = build_parser()
-    args = parser.parse_args(argv)
+    raw = raw_args
+    # PLAN.md section 6.5 writes the autostart command as `"<exe>" --tray`.
+    args = parser.parse_args(["tray" if token == "--tray" else token for token in raw])
     if args.command is None:
         parser.print_help()
         return EXIT_NOT_IMPLEMENTED
+    if args.command == "tray":
+        return _cmd_tray()
     if args.command == "list":
         return _cmd_list(bool(args.json))
     if args.command in _PROCESS_COMMANDS:
@@ -706,6 +835,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_update(args, parser)
     if args.command == "rollback":
         return _cmd_rollback(args)
+    if args.command == "import-legacy":
+        return _cmd_import_legacy(args)
+    if args.command == "autostart":
+        return _cmd_autostart(args)
     print(f"umm {args.command}: not implemented")
     return EXIT_NOT_IMPLEMENTED
 
