@@ -22,6 +22,7 @@ const state = {
   kinds: [],
   profiles: [],
   diag: { session: null, source: "", timer: null },
+  view: "cards",
 };
 
 /* Filled from the catalog once the bridge answers (see loadTranslations). */
@@ -86,13 +87,13 @@ function api() {
 async function call(name, ...args) {
   const bridge = api();
   if (!bridge || typeof bridge[name] !== "function") {
-    log("manager-log", t("js.bridge_unavailable", { name: name }));
+    log("activity-log", t("js.bridge_unavailable", { name: name }));
     return null;
   }
   try {
     return await bridge[name](...args);
   } catch (error) {
-    log("manager-log", t("js.call_failed", { name: name, error: error }));
+    log("activity-log", t("js.call_failed", { name: name, error: error }));
     return null;
   }
 }
@@ -128,6 +129,7 @@ function formatUptime(seconds) {
 
 function setBusy(busy) {
   state.busy = busy;
+  document.body.classList.toggle("busy", busy);
   document.querySelectorAll("button").forEach((button) => {
     if (button.dataset.keepEnabled === "1") return;
     button.disabled = busy;
@@ -136,15 +138,26 @@ function setBusy(busy) {
 
 /* ---------------------------------------------------------- navigation */
 
+const PAGE_TITLES = {
+  dashboard: "ui.tab_dashboard",
+  updates: "ui.tab_updates",
+  settings: "ui.tab_settings",
+  diag: "ui.tab_diagnostics",
+  manager: "ui.tab_manager",
+};
+
 function goto(page, focus) {
   if (!["dashboard", "updates", "settings", "diag", "manager"].includes(page)) page = "dashboard";
   state.page = page;
   document.querySelectorAll(".page").forEach((section) => {
     section.classList.toggle("active", section.id === "page-" + page);
   });
-  document.querySelectorAll("header .tab").forEach((tab) => {
-    tab.classList.toggle("active", tab.dataset.page === page);
+  document.querySelectorAll(".nav-item[data-page]").forEach((item) => {
+    item.classList.toggle("active", item.dataset.page === page);
   });
+  const title = $("page-title");
+  if (title) title.textContent = t(PAGE_TITLES[page]);
+  document.querySelectorAll("details.menu[open]").forEach((menu) => menu.removeAttribute("open"));
   if (page === "manager") loadManager();
   if (page === "diag") loadDiag();
   if (page === "updates") renderUpdates();
@@ -160,7 +173,7 @@ function pidText(row) {
   return boot ? boot + " / " + app : String(app);
 }
 
-function renderInstances() {
+function renderInstancesTable() {
   const body = $("instances-body");
   body.textContent = "";
   if (!state.rows.length) {
@@ -216,30 +229,7 @@ function renderInstances() {
     });
 
     const autostart = document.createElement("td");
-    const toggle = document.createElement("input");
-    toggle.type = "checkbox";
-    toggle.checked = Boolean(row.autostart_entry);
-    toggle.title = text(row.autostart_command, t("js.no_run_entry"));
-    toggle.disabled = !row.exe_path;
-    toggle.addEventListener("change", async () => {
-      setBusy(true);
-      const result = await call("set_instance_autostart", row.id, toggle.checked);
-      if (result && result.ok === false) {
-        log("manager-log", t("js.autostart_of", { instance: row.id, detail: text(result.detail) }));
-        toggle.checked = !toggle.checked;
-      } else {
-        log(
-          "manager-log",
-          t("js.autostart_of", {
-            instance: row.id,
-            detail: toggle.checked ? t("js.enabled") : t("js.disabled_f"),
-          })
-        );
-      }
-      setBusy(false);
-      refresh();
-    });
-    autostart.appendChild(toggle);
+    autostart.appendChild(autostartToggle(row));
     tr.appendChild(autostart);
 
     const health = document.createElement("td");
@@ -292,12 +282,18 @@ function renderInstances() {
     body.appendChild(tr);
   });
 
-  const running = state.rows.filter((row) => row.is_running).length;
-  $("dashboard-hint").textContent = t("js.dashboard_hint", {
-    running: running,
-    total: state.rows.length,
-    last: formatDate(state.updates.last_check),
+}
+
+function renderInstances() {
+  const cards = state.view === "cards";
+  $("instances-cards").hidden = !cards;
+  $("instances-table").hidden = cards;
+  document.querySelectorAll("#view-switch button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.view === state.view);
   });
+  if (cards) renderInstanceCards();
+  else renderInstancesTable();
+  renderStats();
 }
 
 function watchdogEventsFor(id) {
@@ -306,27 +302,27 @@ function watchdogEventsFor(id) {
 
 async function repairInstance(id) {
   setBusy(true);
-  log("manager-log", "riparazione di " + id + "…");
+  log("activity-log", "riparazione di " + id + "…");
   const result = await call("repair_instance", id);
-  if (result) log("manager-log", "  " + text(result.detail, JSON.stringify(result)));
+  if (result) toast(text(result.detail, JSON.stringify(result)), result.ok === false ? "error" : "ok");
   setBusy(false);
   await refresh();
 }
 
 async function act(action, id) {
   setBusy(true);
-  log("manager-log", action + " " + id + "…");
+  log("activity-log", action + " " + id + "…");
   const results = await call(action, [id]);
-  (results || []).forEach((result) => log("manager-log", "  " + text(result.detail, JSON.stringify(result))));
+  reportResults(results);
   setBusy(false);
   await refresh();
 }
 
 async function bulk(action) {
   setBusy(true);
-  log("manager-log", action + "…");
+  log("activity-log", action + "…");
   const results = await call(action);
-  (results || []).forEach((result) => log("manager-log", "  " + text(result.detail, JSON.stringify(result))));
+  reportResults(results);
   setBusy(false);
   await refresh();
 }
@@ -361,6 +357,10 @@ function planList() {
 }
 
 function renderUpdates() {
+  const badge = $("nav-updates-badge");
+  const count = (state.updates.available || []).length;
+  badge.hidden = !count;
+  badge.textContent = String(count);
   const list = $("updates-list");
   list.textContent = "";
   const plans = planList();
@@ -396,6 +396,7 @@ async function selectUpdate(exePath) {
   const data = await call("get_changelog", exePath);
   if (!data || !data.tag) {
     $("changelog").textContent = t("js.no_changelog");
+    toast(t("js.no_changelog"), "warn");
     return;
   }
   $("update-detail").hidden = false;
@@ -463,7 +464,7 @@ async function restoreArchived(version) {
   setBusy(true);
   log("update-log", "ripristino della " + version + "…");
   const result = await call("restore_archived", state.selected, version);
-  if (result) log("update-log", (result.ok ? "OK: " : "ERRORE: ") + text(result.detail));
+  if (result) reportOutcome("update-log", result);
   setBusy(false);
   await loadArchive();
   await refresh();
@@ -476,7 +477,7 @@ async function skipSelected() {
   const skipped = (state.updates.skipped || []).some((item) => item.exe_path === state.selected);
   setBusy(true);
   const result = await call(skipped ? "unskip_version" : "skip_version", plan.kind);
-  if (result) log("update-log", text(result.detail, JSON.stringify(result)));
+  if (result) toast(text(result.detail, JSON.stringify(result)), "ok");
   setBusy(false);
   await refresh();
   renderDetail();
@@ -489,7 +490,7 @@ async function applyUpdate() {
   $("progress-fill").style.width = "0%";
   log("update-log", t("js.updating", { target: state.selected }));
   const result = await call("apply_update", state.selected);
-  if (result) log("update-log", (result.ok ? "OK: " : "ERRORE: ") + text(result.detail));
+  if (result) reportOutcome("update-log", result);
   $("progress").hidden = true;
   setBusy(false);
   await refresh();
@@ -500,7 +501,7 @@ async function rollback() {
   setBusy(true);
   log("update-log", "rollback di " + state.selected);
   const result = await call("rollback", state.selected);
-  if (result) log("update-log", (result.ok ? "OK: " : "ERRORE: ") + text(result.detail));
+  if (result) reportOutcome("update-log", result);
   setBusy(false);
   await refresh();
 }
@@ -562,7 +563,7 @@ async function startDiag() {
   setBusy(true);
   const result = await call("diag_start", id);
   setBusy(false);
-  if (result) log("diag-log", text(result.detail));
+  if (result) toast(text(result.detail), result.ok === false ? "error" : "ok");
   await refresh();
   await loadDiag();
 }
@@ -573,7 +574,7 @@ async function stopDiag() {
   setBusy(true);
   const result = await call("diag_stop", id);
   setBusy(false);
-  if (result) log("diag-log", text(result.detail));
+  if (result) toast(text(result.detail), result.ok === false ? "error" : "ok");
   await refresh();
   await loadDiag();
 }
@@ -583,17 +584,18 @@ async function copyDiagReport() {
   const lines = Number($("diag-lines").value) || 200;
   const result = await call("diag_report", id, lines);
   if (result && result.text) copyText(result.text, t("js.diag_copied"));
+  else toast(t("js.copy_failed"), "error");
 }
 
 function copyText(value, message) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(value).then(
-      () => log("diag-log", message),
-      () => log("diag-log", t("js.copy_failed"))
+      () => toast(message, "ok"),
+      () => toast(t("js.copy_failed"), "error")
     );
     return;
   }
-  log("diag-log", t("js.copy_unavailable"));
+  toast(t("js.copy_unavailable"), "warn");
 }
 
 function toggleFollow() {
@@ -774,7 +776,7 @@ async function applyProfile(name) {
   const result = await call("apply_profile", name);
   setBusy(false);
   if (result) {
-    log("manager-log", t(result.ok ? "js.profile_applied" : "js.profile_errors", { name: name }));
+    toast(t(result.ok ? "js.profile_applied" : "js.profile_errors", { name: name }), result.ok ? "ok" : "error");
   }
   await refresh();
 }
@@ -859,13 +861,13 @@ async function setToken() {
   const field = $("token-input");
   const value = field.value;
   if (!value.trim()) {
-    log("manager-log", t("js.token_field_empty"));
+    log("activity-log", t("js.token_field_empty"));
     return;
   }
   setBusy(true);
   const result = await call("set_github_token", value);
   field.value = ""; // the value is never shown again, here or anywhere else
-  if (result) log("manager-log", text(result.detail));
+  if (result) toast(text(result.detail), result.ok === false ? "error" : "ok");
   setBusy(false);
   await loadManager();
 }
@@ -873,7 +875,7 @@ async function setToken() {
 async function clearToken() {
   setBusy(true);
   const result = await call("clear_github_token");
-  if (result) log("manager-log", text(result.detail));
+  if (result) toast(text(result.detail), result.ok === false ? "error" : "ok");
   setBusy(false);
   await loadManager();
 }
@@ -902,7 +904,7 @@ async function applySelfUpdate() {
   $("self-progress-fill").style.width = "0%";
   log("self-update-log", t("js.self_updating"));
   const result = await call("apply_self_update");
-  if (result) log("self-update-log", (result.ok ? "OK: " : "ERRORE: ") + text(result.detail));
+  if (result) reportOutcome("self-update-log", result);
   $("self-progress").hidden = true;
   setBusy(false);
 }
@@ -910,16 +912,16 @@ async function applySelfUpdate() {
 async function skipSelfUpdate() {
   const own = state.manager ? state.manager.self_update : null;
   const result = await call(own && own.skipped ? "unskip_version" : "skip_version", "manager");
-  if (result) log("manager-log", text(result.detail, JSON.stringify(result)));
+  if (result) log("activity-log", text(result.detail, JSON.stringify(result)));
   await loadManager();
 }
 
 async function setPreference(key, value) {
   const result = await call("set_preference", key, value);
-  log(
-    "manager-log",
-    t("js.preference_set", { key: key, value: value }) +
-      (result && result.ok === false ? t("js.preference_not_saved") : "")
+  const failed = result && result.ok === false;
+  toast(
+    t("js.preference_set", { key: key, value: value }) + (failed ? t("js.preference_not_saved") : ""),
+    failed ? "error" : "ok"
   );
 }
 
@@ -1602,11 +1604,13 @@ async function saveSettings(restart) {
   setBusy(false);
   if (!result || result.ok === false) {
     settingsLog(t("js.save_failed", { detail: text(result && result.detail) }));
+    toast(t("js.save_failed", { detail: text(result && result.detail) }), "error");
     if (result && result.validation) applyValidation(result.validation);
     return;
   }
   applySettingsPayload(result);
   settingsLog(text(result.detail));
+  toast(text(result.detail), "ok");
   await refresh();
 }
 
@@ -1727,7 +1731,7 @@ function onEvent(payload) {
     }
   } else if (payload.type === "process_event") {
     const event = payload.event || {};
-    log("manager-log", event.action + " " + event.instance_id + ": " + event.message);
+    log("activity-log", event.action + " " + event.instance_id + ": " + event.message);
   } else if (payload.type === "update_state") {
     state.updates = payload.state || state.updates;
     renderUpdates();
@@ -1753,17 +1757,18 @@ window.umm = { goto, onEvent, refresh, openSettings, loadDiag, loadManager };
 /* ------------------------------------------------------------- wiring */
 
 function wire() {
-  document.querySelectorAll(".tab").forEach((tab) => {
-    tab.dataset.keepEnabled = "1";
-    tab.addEventListener("click", () => goto(tab.dataset.page));
+  document.querySelectorAll(".nav-item[data-page]").forEach((item) => {
+    item.dataset.keepEnabled = "1";
+    item.addEventListener("click", () => goto(item.dataset.page));
   });
+  wireChrome();
   document.querySelectorAll("[data-bulk]").forEach((button) => {
     button.addEventListener("click", () => bulk(button.dataset.bulk));
   });
   $("btn-refresh").addEventListener("click", refresh);
   $("btn-check").addEventListener("click", async () => {
     setBusy(true);
-    log("manager-log", t("js.checking_updates"));
+    log("activity-log", t("js.checking_updates"));
     const result = await call("check_updates");
     if (result) state.updates = result;
     setBusy(false);
@@ -1787,9 +1792,9 @@ function wire() {
     const result = await call("set_manager_autostart", checked);
     if (result && result.ok === false) {
       event.target.checked = !checked;
-      log("manager-log", t("js.autostart_manager", { detail: text(result.detail) }));
+      toast(t("js.autostart_manager", { detail: text(result.detail) }), "error");
     } else {
-      log("manager-log", t("js.autostart_manager", { detail: checked ? t("js.on") : t("js.off") }));
+      toast(t("js.autostart_manager", { detail: checked ? t("js.on") : t("js.off") }), "ok");
     }
   });
   $("pref-notify").addEventListener("change", (e) => setPreference("notify_updates", e.target.checked));
@@ -1857,6 +1862,8 @@ function whenBridgeReady(callback) {
 }
 
 function boot() {
+  applyTheme(loadTheme());
+  renderIcons();
   wire();
   whenBridgeReady(() => {
     loadTranslations();
@@ -1870,6 +1877,434 @@ if (document.readyState === "loading") {
   window.addEventListener("DOMContentLoaded", boot);
 } else {
   boot();
+}
+
+/* ------------------------------------------------------------ chrome
+ *
+ * Everything that is about the window itself rather than about the data:
+ * inline icons, toasts, the activity drawer, the theme, the keyboard
+ * shortcuts and the dashboard cards. Nothing here talks to the bridge.
+ */
+
+/* Minimal 24x24 stroke icons (Lucide-like), inlined so the page works
+ * offline and without a font. */
+const ICONS = {
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  download: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/>',
+  sliders: '<path d="M4 6h10"/><path d="M18 6h2"/><path d="M4 12h2"/><path d="M10 12h10"/><path d="M4 18h12"/><path d="M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  activity: '<path d="M4 12h3l2-6 4 12 2-6h5"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.9 4.9 1.4 1.4"/><path d="m17.7 17.7 1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.3 17.7-1.4 1.4"/><path d="m19.1 4.9-1.4 1.4"/>',
+  moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/>',
+  play: '<path d="m6 4 14 8-14 8z"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  rotate: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  check: '<path d="m5 12 5 5L20 7"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  alert: '<path d="M12 3 2 20h20z"/><path d="M12 10v4"/><path d="M12 17h0"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h0"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  cards: '<rect x="3" y="4" width="8" height="7" rx="1.5"/><rect x="13" y="4" width="8" height="7" rx="1.5"/><rect x="3" y="13" width="8" height="7" rx="1.5"/><rect x="13" y="13" width="8" height="7" rx="1.5"/>',
+  rows: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9"/><path d="m17 6 2 2"/><path d="m14 9 2 2"/>',
+  keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h0"/><path d="M10 10h0"/><path d="M14 10h0"/><path d="M18 10h0"/><path d="M8 14h8"/>',
+  box: '<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5"/><path d="M12 12v9"/>',
+  layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+  import: '<path d="M12 3v11"/><path d="m8 10 4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+  wrench: '<path d="M14.7 6.3a4 4 0 0 0 5 5L21 9.8a6 6 0 0 1-7.9 7.9L7 21l-3-3 5.3-6.1A6 6 0 0 1 14.2 3z"/>',
+};
+
+function iconSvg(name) {
+  const body = ICONS[name] || ICONS.info;
+  return '<svg viewBox="0 0 24 24" aria-hidden="true">' + body + "</svg>";
+}
+
+function renderIcons(root) {
+  (root || document).querySelectorAll("[data-icon]").forEach((el) => {
+    el.innerHTML = iconSvg(el.dataset.icon);
+  });
+}
+
+function iconEl(name) {
+  const span = document.createElement("span");
+  span.className = "icon";
+  span.innerHTML = iconSvg(name);
+  return span;
+}
+
+/* ---- toasts ---- */
+
+const TOAST_ICONS = { ok: "check", warn: "alert", error: "alert", info: "info" };
+
+function toast(message, level) {
+  const kind = level || "info";
+  const host = $("toasts");
+  if (!host) return;
+  const box = document.createElement("div");
+  box.className = "toast " + kind;
+  box.appendChild(iconEl(TOAST_ICONS[kind] || "info"));
+  const body = document.createElement("span");
+  body.textContent = message;
+  box.appendChild(body);
+  host.appendChild(box);
+  while (host.children.length > 4) host.removeChild(host.firstChild);
+  const close = () => {
+    box.classList.add("leaving");
+    setTimeout(() => box.remove(), 220);
+  };
+  box.addEventListener("click", close);
+  setTimeout(close, kind === "error" ? 8000 : 4500);
+  log("activity-log", message);
+  if ($("activity-drawer").hidden) {
+    const badge = $("activity-badge");
+    badge.hidden = false;
+    badge.textContent = String((Number(badge.textContent) || 0) + 1);
+  }
+}
+
+/* One toast per process result: the detail with the right colour. */
+function reportResults(results) {
+  (results || []).forEach((result) => {
+    const detail = text(result.detail, JSON.stringify(result));
+    toast(detail, result.ok === false ? "error" : "ok");
+  });
+}
+
+/* Update / rollback / restore: the log keeps the OK/ERRORE line, the toast
+ * shows the same thing without having to open the log. */
+function reportOutcome(logId, result) {
+  const detail = text(result.detail);
+  log(logId, (result.ok ? "OK: " : "ERRORE: ") + detail);
+  toast(detail, result.ok ? "ok" : "error");
+}
+
+/* ---- activity drawer ---- */
+
+function toggleActivity(force) {
+  const drawer = $("activity-drawer");
+  const show = force === undefined ? drawer.hidden : force;
+  drawer.hidden = !show;
+  $("btn-activity").classList.toggle("active", show);
+  if (show) {
+    const badge = $("activity-badge");
+    badge.hidden = true;
+    badge.textContent = "";
+    const box = $("activity-log");
+    box.scrollTop = box.scrollHeight;
+  }
+}
+
+/* ---- theme ---- */
+
+function loadTheme() {
+  try {
+    return localStorage.getItem("umm-theme") || "dark";
+  } catch (error) {
+    return "dark";
+  }
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  const icon = document.querySelector("#btn-theme .nav-icon");
+  if (icon) icon.innerHTML = iconSvg(theme === "light" ? "moon" : "sun");
+  try {
+    localStorage.setItem("umm-theme", theme);
+  } catch (error) {
+    /* private mode or no storage: the choice lasts for the session */
+  }
+}
+
+function toggleTheme() {
+  applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+}
+
+/* ---- view ---- */
+
+function loadView() {
+  try {
+    return localStorage.getItem("umm-view") === "table" ? "table" : "cards";
+  } catch (error) {
+    return "cards";
+  }
+}
+
+function setView(view) {
+  state.view = view === "table" ? "table" : "cards";
+  try {
+    localStorage.setItem("umm-view", state.view);
+  } catch (error) {
+    /* see applyTheme */
+  }
+  renderInstances();
+}
+
+/* ---- dashboard: stats and cards ---- */
+
+function renderStats() {
+  const running = state.rows.filter((row) => row.is_running).length;
+  const updates = (state.updates.available || []).length;
+  const alerts = state.rows.filter((row) => row.watchdog).length;
+  const set = (id, value, tone) => {
+    const node = $(id);
+    node.textContent = String(value);
+    node.parentElement.dataset.tone = tone;
+  };
+  set("stat-running", running + " / " + state.rows.length, running === state.rows.length && running ? "ok" : "");
+  set("stat-updates", updates, updates ? "warn" : "");
+  set("stat-alerts", alerts, alerts ? "warn" : "");
+  set("stat-last-check", formatDate(state.updates.last_check), "");
+  $("dashboard-hint").textContent = t("js.dashboard_hint", {
+    running: running,
+    total: state.rows.length,
+    last: formatDate(state.updates.last_check),
+  });
+}
+
+function autostartToggle(row) {
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox";
+  toggle.className = "switch";
+  toggle.checked = Boolean(row.autostart_entry);
+  toggle.title = text(row.autostart_command, t("js.no_run_entry"));
+  toggle.disabled = !row.exe_path;
+  toggle.addEventListener("change", async () => {
+    setBusy(true);
+    const result = await call("set_instance_autostart", row.id, toggle.checked);
+    if (result && result.ok === false) {
+      toast(t("js.autostart_of", { instance: row.id, detail: text(result.detail) }), "error");
+      toggle.checked = !toggle.checked;
+    } else {
+      toast(
+        t("js.autostart_of", {
+          instance: row.id,
+          detail: toggle.checked ? t("js.enabled") : t("js.disabled_f"),
+        }),
+        "ok"
+      );
+    }
+    setBusy(false);
+    refresh();
+  });
+  return toggle;
+}
+
+function iconButton(icon, label, handler, options) {
+  const opts = options || {};
+  const button = document.createElement("button");
+  button.className =
+    "btn small" + (opts.primary ? " primary" : "") + (opts.danger ? " danger" : "") + (opts.iconOnly ? " icon-only" : "");
+  button.appendChild(iconEl(icon));
+  if (opts.iconOnly) button.title = label;
+  else button.appendChild(document.createTextNode(label));
+  button.disabled = opts.enabled === false;
+  button.addEventListener("click", handler);
+  return button;
+}
+
+function metaRow(dl, label, value, options) {
+  const opts = options || {};
+  const dt = document.createElement("dt");
+  dt.textContent = label;
+  const dd = document.createElement("dd");
+  dd.textContent = value;
+  dd.title = value;
+  if (opts.mono) dd.className = "mono";
+  if (opts.path && value !== "—") {
+    dd.classList.add("path");
+    dd.title = value + "\n" + t("js.click_to_copy");
+    dd.addEventListener("click", () => copyText(value, t("js.path_copied")));
+  }
+  dl.appendChild(dt);
+  dl.appendChild(dd);
+}
+
+function renderInstanceCards() {
+  const host = $("instances-cards");
+  host.textContent = "";
+  if (!state.rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state card-empty";
+    const icon = document.createElement("span");
+    icon.className = "empty-icon";
+    icon.innerHTML = iconSvg("grid");
+    const label = document.createElement("p");
+    label.textContent = t("js.no_instances");
+    empty.appendChild(icon);
+    empty.appendChild(label);
+    host.appendChild(empty);
+    return;
+  }
+
+  state.rows.forEach((row) => {
+    const card = document.createElement("article");
+    card.className = "card" + (row.is_running ? " running" : "") + (row.watchdog ? " alert" : "");
+
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const dot = document.createElement("span");
+    dot.className = "dot " + (row.is_running ? "on" : "off");
+    head.appendChild(dot);
+    const title = document.createElement("span");
+    title.className = "card-title";
+    title.textContent = text(row.label, row.kind_display || row.kind);
+    title.title = row.id;
+    head.appendChild(title);
+    const kind = document.createElement("span");
+    kind.className = "card-kind";
+    kind.textContent = text(row.kind_display, row.kind) + " · " + text(row.local_version, "?");
+    head.appendChild(kind);
+
+    const badges = document.createElement("span");
+    badges.className = "card-badges";
+    if (row.update_available) {
+      const pill = document.createElement("span");
+      pill.className = "pill warn";
+      pill.textContent = "↑ " + text(row.remote_version);
+      badges.appendChild(pill);
+    }
+    if (row.watchdog) {
+      const pill = document.createElement("span");
+      pill.className = "pill danger";
+      pill.textContent = row.watchdog in WATCHDOG_LABELS ? t(WATCHDOG_LABELS[row.watchdog]) : row.watchdog;
+      pill.title = (watchdogEventsFor(row.id)[0] || {}).detail || "";
+      badges.appendChild(pill);
+    } else {
+      const pill = document.createElement("span");
+      pill.className = "pill " + (row.is_running ? "ok" : "");
+      pill.textContent = row.is_running ? t("js.running") : t("js.stopped");
+      badges.appendChild(pill);
+    }
+    head.appendChild(badges);
+    card.appendChild(head);
+
+    const meta = document.createElement("dl");
+    meta.className = "card-meta";
+    metaRow(meta, t("ui.col_config_dir"), text(row.config_dir), { path: true, mono: true });
+    metaRow(meta, t("ui.col_active_settings"), text(row.settings_path), { path: true, mono: true });
+    metaRow(
+      meta,
+      t("ui.col_pid") + " · " + t("ui.col_uptime"),
+      row.is_running ? pidText(row) + " · " + formatUptime(row.uptime_seconds) : "—"
+    );
+    metaRow(meta, t("ui.col_exe_date"), formatDate(row.exe_mtime));
+    card.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "card-actions";
+    if (row.is_running) {
+      actions.appendChild(iconButton("rotate", t("ui.restart_one"), () => act("restart", row.id)));
+      actions.appendChild(iconButton("stop", t("ui.stop_one"), () => act("stop", row.id), { danger: true }));
+    } else {
+      actions.appendChild(
+        iconButton("play", t("ui.start_one"), () => act("start", row.id), { enabled: Boolean(row.exe_path) })
+      );
+    }
+    if (row.watchdog) {
+      actions.appendChild(iconButton("wrench", t("ui.repair"), () => repairInstance(row.id)));
+    }
+    const spacer = document.createElement("span");
+    spacer.className = "spacer";
+    actions.appendChild(spacer);
+
+    const auto = document.createElement("label");
+    auto.className = "row switch-row";
+    auto.title = text(row.autostart_command, t("js.no_run_entry"));
+    auto.appendChild(autostartToggle(row));
+    const autoLabel = document.createElement("span");
+    autoLabel.className = "hint";
+    autoLabel.textContent = t("ui.col_autostart");
+    auto.appendChild(autoLabel);
+    actions.appendChild(auto);
+
+    actions.appendChild(iconButton("sliders", t("ui.tab_settings"), () => showSettings(row.id), { iconOnly: true }));
+    actions.appendChild(
+      iconButton("folder", t("ui.folder"), () => call("open_folder", row.config_dir), { iconOnly: true })
+    );
+    if (row.update_available) {
+      actions.appendChild(
+        iconButton(
+          "download",
+          t("ui.update"),
+          () => {
+            selectUpdate(row.exe_path);
+            goto("updates");
+          },
+          { primary: true }
+        )
+      );
+    }
+    card.appendChild(actions);
+    host.appendChild(card);
+  });
+}
+
+/* ---- shortcuts, drawer, theme, menus ---- */
+
+const PAGE_KEYS = ["dashboard", "updates", "settings", "diag", "manager"];
+
+function wireChrome() {
+  state.view = loadView();
+  document.querySelectorAll("#view-switch button").forEach((button) => {
+    button.addEventListener("click", () => setView(button.dataset.view));
+  });
+  document.querySelectorAll(".stat[data-stat]").forEach((tile) => {
+    tile.addEventListener("click", () => {
+      if (tile.dataset.stat === "updates") goto("updates");
+      else if (tile.dataset.stat === "alerts") toggleActivity(true);
+      else refresh();
+    });
+  });
+  $("btn-activity").addEventListener("click", () => toggleActivity());
+  $("btn-activity-close").addEventListener("click", () => toggleActivity(false));
+  $("btn-activity-clear").addEventListener("click", () => {
+    $("activity-log").textContent = "";
+  });
+  $("btn-theme").addEventListener("click", toggleTheme);
+
+  /* a menu closes after any of its items, and when clicking elsewhere */
+  document.querySelectorAll("details.menu").forEach((menu) => {
+    menu.querySelectorAll(".menu-item").forEach((item) => {
+      item.addEventListener("click", () => menu.removeAttribute("open"));
+    });
+  });
+  document.addEventListener("click", (event) => {
+    document.querySelectorAll("details.menu[open]").forEach((menu) => {
+      if (!menu.contains(event.target)) menu.removeAttribute("open");
+    });
+  });
+
+  document.addEventListener("keydown", (event) => {
+    const editing = /^(INPUT|TEXTAREA|SELECT)$/.test((event.target && event.target.tagName) || "");
+    if (event.key === "Escape") {
+      if (!$("activity-drawer").hidden) toggleActivity(false);
+      document.querySelectorAll("details.menu[open]").forEach((menu) => menu.removeAttribute("open"));
+      return;
+    }
+    if (event.key === "F5") {
+      event.preventDefault();
+      refresh();
+      return;
+    }
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const digit = Number(event.key);
+    if (digit >= 1 && digit <= PAGE_KEYS.length) {
+      event.preventDefault();
+      goto(PAGE_KEYS[digit - 1]);
+    } else if (event.key.toLowerCase() === "u" && !editing) {
+      event.preventDefault();
+      $("btn-check").click();
+    } else if (event.key.toLowerCase() === "s" && state.page === "settings") {
+      event.preventDefault();
+      if (!$("btn-settings-save").disabled) saveSettings(false);
+    }
+  });
 }
 
 /* ---------------------------------------------------- markdown (tiny) */

@@ -423,5 +423,19 @@
   "error.unexpected": "Errore inatteso: il dettaglio, con il traceback, e' in logs\\manager.log",
   "error.debug_hint": "Riesegui con --debug per vedere il traceback.",
   "cli.help.debug": "mostra il traceback invece del solo messaggio d'errore",
-  "error.hint_profile_list": "Vedi i profili definiti con 'umm profile list'."
+  "error.hint_profile_list": "Vedi i profili definiti con 'umm profile list'.",
+  "ui.activity": "Attivita'",
+  "ui.theme": "Tema",
+  "ui.stat_running": "In esecuzione",
+  "ui.stat_updates": "Aggiornamenti",
+  "ui.stat_alerts": "Segnalazioni",
+  "ui.stat_last_check": "Ultimo controllo",
+  "ui.select_exe_hint": "Seleziona un eseguibile per vedere il changelog.",
+  "ui.archive_note": "Gli eseguibili sostituiti restano in .umm-archive accanto al file aggiornato: \"Ripristina\" ferma le istanze, rimette al suo posto quella build e le riavvia.",
+  "ui.more": "Altro",
+  "ui.clear": "Svuota",
+  "js.running": "in esecuzione",
+  "js.stopped": "ferma",
+  "js.click_to_copy": "clic per copiare",
+  "js.path_copied": "Percorso copiato negli appunti."
 }

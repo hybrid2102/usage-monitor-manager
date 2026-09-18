@@ -423,5 +423,19 @@
   "error.unexpected": "Unexpected error: the details, traceback included, are in logs\\manager.log",
   "error.debug_hint": "Run it again with --debug to see the traceback.",
   "cli.help.debug": "print the traceback instead of just the error message",
-  "error.hint_profile_list": "See the profiles you have with 'umm profile list'."
+  "error.hint_profile_list": "See the profiles you have with 'umm profile list'.",
+  "ui.activity": "Activity",
+  "ui.theme": "Theme",
+  "ui.stat_running": "Running",
+  "ui.stat_updates": "Updates",
+  "ui.stat_alerts": "Alerts",
+  "ui.stat_last_check": "Last check",
+  "ui.select_exe_hint": "Select an executable to see its changelog.",
+  "ui.archive_note": "Replaced executables stay in .umm-archive next to the updated file: \"Restore\" stops the instances, puts that build back and restarts them.",
+  "ui.more": "More",
+  "ui.clear": "Clear",
+  "js.running": "running",
+  "js.stopped": "stopped",
+  "js.click_to_copy": "click to copy",
+  "js.path_copied": "Path copied to the clipboard."
 }

@@ -71,12 +71,20 @@ sottomenu di profili di avvio (§10) e tipi gestiti.
 
 ## 4. Le pagine della finestra
 
-La finestra (pywebview, HTML/CSS/JS) ha cinque schede:
+La finestra (pywebview, HTML/CSS/JS) ha una barra laterale con cinque pagine
+(`Ctrl+1`…`Ctrl+5`), un pannello **Attività** con l'esito di ogni operazione
+(gli stessi messaggi compaiono come notifiche in basso a destra) e un
+interruttore per il tema chiaro/scuro. `F5` aggiorna l'elenco, `Ctrl+U` avvia
+il controllo aggiornamenti, `Esc` chiude pannello e menu.
 
-- **Dashboard** — tabella delle istanze scoperte: tipo, etichetta, cartella di
-  configurazione, versione locale/remota, data dell'exe, PID, stato,
-  autostart, quale file di settings è effettivamente usato. È il punto da cui
-  si arriva a Riavvia/Ferma/Impostazioni per ogni riga.
+- **Dashboard** — quattro riquadri (istanze in esecuzione, aggiornamenti
+  disponibili, segnalazioni del watchdog, ultimo controllo) e una scheda per
+  istanza: stato, versione locale con badge della versione remota, cartella di
+  configurazione e file di settings effettivamente usato (clic per copiare il
+  percorso), PID e uptime, data dell'exe, interruttore autostart e i pulsanti
+  Riavvia/Ferma/Avvia, Impostazioni, Cartella, Ripara, Aggiorna. Il selettore
+  accanto al titolo passa alla vista tabellare classica; la scelta è
+  ricordata.
 - **Aggiornamenti** — elenco dei tipi con confronto versione locale/ultima
   release, changelog della versione selezionata, bottone Aggiorna con log
   dell'operazione in tempo reale.

@@ -8,6 +8,24 @@ Ogni versione corrisponde a una fase del piano di sviluppo (`PLAN.md`, §7).
 
 ## [Non rilasciato]
 
+### Modificato
+
+- **Interfaccia della finestra ridisegnata.** Barra laterale con icone al
+  posto delle schede in alto, dashboard con riquadri di riepilogo e schede per
+  istanza (vista tabellare ancora disponibile, scelta ricordata), notifiche
+  toast per l'esito di ogni operazione e pannello **Attività** con lo storico
+  della sessione, tema chiaro/scuro, scorciatoie (`Ctrl+1`…`5`, `F5`,
+  `Ctrl+U`, `Ctrl+S` nell'editor, `Esc`), interruttori al posto delle
+  checkbox, azioni secondarie dell'editor raccolte in un menu "Altro",
+  indicatore di operazione in corso, stati vuoti espliciti.
+- L'attività della sessione non si mescola più al contenuto di `manager.log`
+  nella pagina Manager: ha il suo pannello.
+
+### Corretto
+
+- Le sotto-schede dell'editor (Modulo/JSON/Altre chiavi/Storico) riportavano
+  alla Dashboard perché condividevano il selettore delle schede principali.
+
 ## [1.0.0] - 2026-09-18
 
 Prima versione stabile. Consolida le fasi 0-8 del piano
