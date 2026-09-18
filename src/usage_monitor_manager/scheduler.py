@@ -30,13 +30,16 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import manager_config
+from . import __version__, manager_config
 from .model import JsonDict, UpdatePlan
+from .self_update import MANAGER_REPO, SelfUpdateCheck, check_self
+from .versions import VersionStatus
 
 __all__ = [
     "DEFAULT_FIRST_DELAY_SECONDS",
     "Clock",
     "PlanProvider",
+    "SelfCheckProvider",
     "UpdateScheduler",
     "UpdateState",
     "Waiter",
@@ -54,6 +57,9 @@ Waiter = Callable[[float], bool]
 
 PlanProvider = Callable[[], Sequence[UpdatePlan]]
 """Produces the current update plans; the default one hits discovery + GitHub."""
+
+SelfCheckProvider = Callable[[bool], SelfUpdateCheck]
+"""``provider(include_prerelease)``: the manager's own update state."""
 
 
 def _utc_now() -> datetime:
@@ -73,24 +79,38 @@ class UpdateState:
     available: tuple[UpdatePlan, ...] = ()
     error: str | None = None
     checking: bool = False
+    skipped: tuple[UpdatePlan, ...] = ()
+    """Updates that exist but carry a tag the user chose to skip (section 9.5)."""
+    self_update: SelfUpdateCheck | None = None
+    """The manager's own update state; ``None`` before the first check."""
 
     @property
     def update_count(self) -> int:
-        """How many executables have an update the user has not skipped."""
-        return len(self.available)
+        """How many executables have an update the user has not skipped.
+
+        The manager itself counts as one, so the tray badge shows "2" when a
+        monitor and the manager are both behind.
+        """
+        return len(self.available) + (1 if self.self_update is not None and self.self_update.available else 0)
 
     def to_dict(self) -> JsonDict:
         return {
             "last_check": None if self.last_check is None else self.last_check.isoformat(),
             "plans": [plan.to_dict() for plan in self.plans],
             "available": [plan.to_dict() for plan in self.available],
+            "skipped": [plan.to_dict() for plan in self.skipped],
             "update_count": self.update_count,
             "error": self.error,
             "checking": self.checking,
+            "self_update": None if self.self_update is None else self.self_update.to_dict(),
         }
 
 
-def default_plan_provider(*, include_prerelease: bool = False) -> Sequence[UpdatePlan]:
+def default_plan_provider(
+    *,
+    include_prerelease: bool = False,
+    prerelease_for: Callable[[str], bool] | None = None,
+) -> Sequence[UpdatePlan]:
     """Discover the instances and ask GitHub: the real check.
 
     Imported lazily so that ``import scheduler`` costs nothing (psutil and the
@@ -99,7 +119,7 @@ def default_plan_provider(*, include_prerelease: bool = False) -> Sequence[Updat
     from .discovery import discover
     from .updater import plan_updates
 
-    return plan_updates(discover(), include_prerelease=include_prerelease)
+    return plan_updates(discover(), include_prerelease=include_prerelease, prerelease_for=prerelease_for)
 
 
 def _is_available(plan: UpdatePlan) -> bool:
@@ -130,6 +150,9 @@ class UpdateScheduler:
         on_updates_available: Callable[[Sequence[UpdatePlan]], None] | None = None,
         on_state_change: Callable[[UpdateState], None] | None = None,
         plan_provider: PlanProvider | None = None,
+        self_check_provider: SelfCheckProvider | None = None,
+        on_self_update_available: Callable[[SelfUpdateCheck], None] | None = None,
+        check_self_update: bool = True,
         config_path: Path | None = None,
         clock: Clock = _utc_now,
         wait: Waiter | None = None,
@@ -138,6 +161,9 @@ class UpdateScheduler:
         self._on_updates = on_updates_available
         self._on_state = on_state_change
         self._plan_provider = plan_provider
+        self._self_check_provider = self_check_provider
+        self._on_self_update = on_self_update_available
+        self._check_self = check_self_update
         self._config_path = config_path
         self._clock = clock
         self._first_delay = first_delay
@@ -146,6 +172,7 @@ class UpdateScheduler:
         self._lock = threading.Lock()
         self._state = UpdateState()
         self._notified: set[tuple[str, str]] = set()
+        self._self_notified: set[str] = set()
         self._thread: threading.Thread | None = None
 
     # -- state ---------------------------------------------------------------
@@ -178,7 +205,22 @@ class UpdateScheduler:
     def _provide(self, config: manager_config.ManagerConfig) -> Sequence[UpdatePlan]:
         if self._plan_provider is not None:
             return self._plan_provider()
-        return default_plan_provider(include_prerelease=config.preferences.include_prerelease)
+        return default_plan_provider(
+            include_prerelease=config.preferences.include_prerelease,
+            prerelease_for=config.include_prerelease_for,
+        )
+
+    def _provide_self(self, config: manager_config.ManagerConfig) -> SelfUpdateCheck | None:
+        """The manager's own repo, checked alongside the monitors (section 6.5)."""
+        if not self._check_self:
+            return None
+        include_prerelease = config.include_prerelease_for(MANAGER_REPO)
+        if self._self_check_provider is not None:
+            return self._self_check_provider(include_prerelease)
+        return check_self(
+            include_prerelease=include_prerelease,
+            skipped_tag=config.skipped_versions.get(MANAGER_REPO),
+        )
 
     def check_now(self) -> UpdateState:
         """Run one check, update the state, notify about new releases.
@@ -193,15 +235,31 @@ class UpdateScheduler:
             plans = tuple(self._provide(config))
         except Exception as error:  # noqa: BLE001 - the UI shows the text, whatever it is
             return self._set_state(checking=False, error=f"{type(error).__name__}: {error}", last_check=self._clock())
-        available = tuple(
-            plan
-            for plan in plans
-            if _is_available(plan) and config.skipped_versions.get(plan.kind.repo) != plan.target.tag
-        )
+        outdated = tuple(plan for plan in plans if _is_available(plan))
+        available = tuple(plan for plan in outdated if not config.is_skipped(plan.kind.repo, plan.target.tag))
+        skipped = tuple(plan for plan in outdated if config.is_skipped(plan.kind.repo, plan.target.tag))
+        try:
+            own = self._provide_self(config)
+        except Exception as error:  # noqa: BLE001 - check_self swallows its own, this is belt and braces
+            own = SelfUpdateCheck(
+                status=VersionStatus.UNKNOWN,
+                current_version=__version__,
+                detail=f"{type(error).__name__}: {error}",
+                error=str(error),
+            )
         now = self._clock()
-        state = self._set_state(checking=False, error=None, plans=plans, available=available, last_check=now)
+        state = self._set_state(
+            checking=False,
+            error=None,
+            plans=plans,
+            available=available,
+            skipped=skipped,
+            self_update=own,
+            last_check=now,
+        )
         self._remember_check(config, plans, now)
         self._notify(config, available)
+        self._notify_self(config, own)
         return state
 
     def _remember_check(
@@ -234,9 +292,21 @@ class UpdateScheduler:
         if fresh:
             self._on_updates(fresh)
 
+    def _notify_self(self, config: manager_config.ManagerConfig, own: SelfUpdateCheck | None) -> None:
+        """One toast per newly published manager release, never more."""
+        if own is None or not own.available or own.tag is None:
+            return
+        if self._on_self_update is None or not config.preferences.notify_updates:
+            return
+        if own.tag in self._self_notified:
+            return
+        self._self_notified.add(own.tag)
+        self._on_self_update(own)
+
     def forget_notifications(self) -> None:
         """Let already-seen releases notify again (after "salta versione", say)."""
         self._notified.clear()
+        self._self_notified.clear()
 
     # -- thread --------------------------------------------------------------
 

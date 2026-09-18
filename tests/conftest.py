@@ -1,0 +1,47 @@
+"""Suite-wide safety net: no test reaches the network or the real credential store.
+
+Two autouse fixtures, both of which fail loudly rather than silently doing the
+real thing:
+
+* every HTTP call of the manager goes through ``github._open`` (that is the
+  single seam the module documents). Replacing it with a function that fails
+  the test means a new code path that forgets to inject a fake - the manager's
+  own self-update check inside ``UpdateScheduler``, for instance - is caught
+  the first time it runs instead of quietly burning the anonymous rate limit.
+* ``secrets`` gets an empty in-memory store, so nothing reads or writes the
+  real Windows Credential Manager. The tests that exercise the real store
+  (``test_secrets.py``) opt out explicitly and use their own target name.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from usage_monitor_manager import github, secrets
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    """Fail any test that opens a real connection to GitHub."""
+    if "allow_network" in request.keywords:  # pragma: no cover - no test uses it yet
+        return
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("this test tried to reach the network; inject a fake instead")
+
+    monkeypatch.setattr(github, "_open", refuse)
+
+
+@pytest.fixture(autouse=True)
+def no_real_credentials(request: pytest.FixtureRequest) -> Any:
+    """Keep the real Credential Manager out of every test but its own."""
+    if "real_credentials" in request.keywords:
+        yield
+        return
+    previous = secrets.set_store(secrets.MemoryCredentialStore())
+    try:
+        yield
+    finally:
+        secrets.set_store(previous)

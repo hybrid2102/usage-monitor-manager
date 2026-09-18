@@ -40,6 +40,9 @@ from .model import JsonDict
 
 __all__ = [
     "APP_DIR_NAME",
+    "set_prerelease_repo",
+    "skip_version",
+    "unskip_version",
     "CONFIG_FILENAME",
     "CONFIG_VERSION",
     "DeclaredInstance",
@@ -60,6 +63,8 @@ CONFIG_VERSION = 1
 _LANGUAGES = ("it", "en")
 _MIN_INTERVAL_HOURS = 1
 _MAX_INTERVAL_HOURS = 24 * 7
+_MIN_ARCHIVE_KEEP = 0
+_MAX_ARCHIVE_KEEP = 20
 
 
 def app_dir() -> Path:
@@ -106,6 +111,10 @@ def _as_str_map(value: object) -> dict[str, str]:
     return result
 
 
+def _as_bool_map(value: object) -> dict[str, bool]:
+    return {str(key): raw for key, raw in _as_dict(value).items() if isinstance(raw, bool)}
+
+
 def _as_int(value: object, fallback: int, *, low: int, high: int) -> int:
     number = value if isinstance(value, int) and not isinstance(value, bool) else fallback
     return max(low, min(high, number))
@@ -125,6 +134,17 @@ class Preferences:
     autostart_manager: bool = False
     include_prerelease: bool = False
     language: str = "it"
+    watchdog_enabled: bool = True
+    """Run the instance watchdog of PLAN.md section 9.2 (crash/duplicate/orphan)."""
+    auto_restart_crashed: bool = False
+    """Restart a crashed instance by itself instead of only notifying.
+
+    Off by default: restarting something the user killed on purpose would be
+    worse than a missed notification, and the watchdog cannot tell the two
+    apart beyond the manager's own "expected down" set.
+    """
+    archive_keep: int = 3
+    """How many previous builds of each executable ``.umm-archive`` keeps."""
 
     @classmethod
     def from_dict(cls, payload: object) -> Preferences:
@@ -142,6 +162,14 @@ class Preferences:
             autostart_manager=_as_bool(data.get("autostart_manager"), default.autostart_manager),
             include_prerelease=_as_bool(data.get("include_prerelease"), default.include_prerelease),
             language=language if language in _LANGUAGES else default.language,
+            watchdog_enabled=_as_bool(data.get("watchdog_enabled"), default.watchdog_enabled),
+            auto_restart_crashed=_as_bool(data.get("auto_restart_crashed"), default.auto_restart_crashed),
+            archive_keep=_as_int(
+                data.get("archive_keep"),
+                default.archive_keep,
+                low=_MIN_ARCHIVE_KEEP,
+                high=_MAX_ARCHIVE_KEEP,
+            ),
         )
 
     def to_dict(self) -> JsonDict:
@@ -151,6 +179,9 @@ class Preferences:
             "autostart_manager": self.autostart_manager,
             "include_prerelease": self.include_prerelease,
             "language": self.language,
+            "watchdog_enabled": self.watchdog_enabled,
+            "auto_restart_crashed": self.auto_restart_crashed,
+            "archive_keep": self.archive_keep,
         }
 
     def with_value(self, key: str, value: object) -> Preferences:
@@ -218,6 +249,8 @@ class ManagerConfig:
     preferences: Preferences = field(default_factory=Preferences)
     last_check: Mapping[str, str] = field(default_factory=lambda: {})
     skipped_versions: Mapping[str, str] = field(default_factory=lambda: {})
+    prerelease_repos: Mapping[str, bool] = field(default_factory=lambda: {})
+    """Per-repo override of ``preferences.include_prerelease`` (PLAN.md section 9.5)."""
     legacy_import_done: bool = False
     extra: Mapping[str, Any] = field(default_factory=lambda: {})
 
@@ -231,6 +264,7 @@ class ManagerConfig:
             "preferences",
             "last_check",
             "skipped_versions",
+            "prerelease_repos",
             "legacy_import_done",
         }
         raw_instances = data.get("instances")
@@ -248,6 +282,7 @@ class ManagerConfig:
             preferences=Preferences.from_dict(data.get("preferences")),
             last_check=_as_str_map(data.get("last_check")),
             skipped_versions=_as_str_map(data.get("skipped_versions")),
+            prerelease_repos=_as_bool_map(data.get("prerelease_repos")),
             legacy_import_done=_as_bool(data.get("legacy_import_done"), False),
             extra={key: value for key, value in data.items() if key not in known},
         )
@@ -261,6 +296,7 @@ class ManagerConfig:
                 "preferences": self.preferences.to_dict(),
                 "last_check": dict(self.last_check),
                 "skipped_versions": dict(self.skipped_versions),
+                "prerelease_repos": dict(self.prerelease_repos),
                 "legacy_import_done": self.legacy_import_done,
             }
         )
@@ -273,6 +309,15 @@ class ManagerConfig:
             if entry.merge_key == wanted:
                 return entry.label
         return None
+
+    def include_prerelease_for(self, repo: str) -> bool:
+        """Prerelease channel for one repo: the override, else the global flag."""
+        override = self.prerelease_repos.get(repo)
+        return self.preferences.include_prerelease if override is None else override
+
+    def is_skipped(self, repo: str, tag: str) -> bool:
+        """True when the user pressed "Salta questa versione" for this release."""
+        return bool(tag) and self.skipped_versions.get(repo) == tag
 
     def with_instances(self, entries: Iterable[DeclaredInstance]) -> ManagerConfig:
         deduped: list[DeclaredInstance] = []
@@ -354,5 +399,38 @@ def upsert_instance(entry: DeclaredInstance, path: Path | None = None) -> Manage
     config = load(path)
     others: Sequence[DeclaredInstance] = [i for i in config.instances if i.merge_key != entry.merge_key]
     updated = config.with_instances([*others, entry])
+    save(updated, path)
+    return updated
+
+
+def skip_version(repo: str, tag: str, path: Path | None = None) -> ManagerConfig:
+    """Record "salta questa versione" for one repo (PLAN.md section 9.5)."""
+    config = load(path)
+    skipped = dict(config.skipped_versions)
+    skipped[repo] = tag
+    updated = replace(config, skipped_versions=skipped)
+    save(updated, path)
+    return updated
+
+
+def unskip_version(repo: str, path: Path | None = None) -> ManagerConfig:
+    """Forget the skipped release of one repo; a repo with none is a no-op."""
+    config = load(path)
+    skipped = dict(config.skipped_versions)
+    skipped.pop(repo, None)
+    updated = replace(config, skipped_versions=skipped)
+    save(updated, path)
+    return updated
+
+
+def set_prerelease_repo(repo: str, value: bool | None, path: Path | None = None) -> ManagerConfig:
+    """Override (or, with ``None``, clear) the prerelease channel of one repo."""
+    config = load(path)
+    overrides = dict(config.prerelease_repos)
+    if value is None:
+        overrides.pop(repo, None)
+    else:
+        overrides[repo] = value
+    updated = replace(config, prerelease_repos=overrides)
     save(updated, path)
     return updated

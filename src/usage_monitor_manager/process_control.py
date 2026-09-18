@@ -57,6 +57,7 @@ __all__ = [
     "build_argv",
     "build_env",
     "build_env_overrides",
+    "inherited_env",
     "describe_start",
     "describe_stop",
     "get_instance_autostart",
@@ -66,6 +67,7 @@ __all__ = [
     "set_instance_autostart",
     "restart",
     "restart_all",
+    "spawn_detached",
     "start",
     "start_missing",
     "stop",
@@ -371,9 +373,20 @@ def strips_env_var(instance: Instance) -> bool:
     return is_default_config_dir(instance) and instance.kind.env_var in os.environ
 
 
+def inherited_env() -> dict[str, str]:
+    """This process' environment minus the PyInstaller bootstrap variables.
+
+    The base every child of the manager gets, monitors and the manager's own
+    replacement alike (``self_update.apply_self`` relaunches the new executable
+    with exactly this environment: a one-file build that inherited its parent's
+    ``_MEIPASS2`` would try to load the *old* bundle and die).
+    """
+    return {key: value for key, value in os.environ.items() if not key.startswith(INHERITED_ENV_BLOCKLIST)}
+
+
 def build_env(instance: Instance) -> dict[str, str]:
     """The child's environment: inherited, scrubbed, then made unambiguous."""
-    env = {key: value for key, value in os.environ.items() if not key.startswith(INHERITED_ENV_BLOCKLIST)}
+    env = inherited_env()
     if is_default_config_dir(instance):
         env.pop(instance.kind.env_var, None)
     else:
@@ -636,6 +649,11 @@ def _spawn(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> int:
         **kwargs,
     )
     return process.pid
+
+
+def spawn_detached(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> int:
+    """Public name of the detached, windowless launch used across the manager."""
+    return _spawn(argv, env, cwd)
 
 
 def _find_running(instance: Instance) -> Instance | None:

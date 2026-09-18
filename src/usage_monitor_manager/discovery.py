@@ -39,9 +39,11 @@ __all__ = [
     "PRODUCT_NAME_PREFIX",
     "SETTINGS_FILENAME",
     "ProcessSnapshot",
+    "RunningProcess",
     "discover",
     "discover_instances",
     "kind_for_config_dir_name",
+    "running_processes",
     "scan_processes",
     "settings_candidates",
     "shortcut_paths",
@@ -578,3 +580,46 @@ def discover(
 def discover_instances() -> Sequence[Instance]:
     """Backwards-compatible alias of :func:`discover`."""
     return discover()
+
+
+@dataclass(frozen=True, slots=True)
+class RunningProcess:
+    """One *running* monitor process pair, before instances are merged.
+
+    :func:`discover` collapses everything that belongs to the same
+    ``(kind, config dir)`` into a single :class:`~.model.Instance`, which is
+    what a dashboard wants and exactly what the watchdog of PLAN.md section 9.2
+    must not have: two app processes for one suffix are an anomaly, and merging
+    them hides it. This is therefore the uncollapsed view, kept next to the
+    code that produces it so the pairing logic exists once.
+    """
+
+    kind: MonitorKind
+    config_dir: Path
+    config_dir_source: ConfigDirSource
+    exe_path: Path | None
+    processes: ProcessPair
+
+    @property
+    def instance_suffix(self) -> str:
+        return config_dir_suffix(self.config_dir, self.kind.default_config_dir)
+
+    @property
+    def instance_id(self) -> str:
+        return f"{self.kind.key}{self.instance_suffix}"
+
+
+def running_processes() -> list[RunningProcess]:
+    """Every running monitor process pair, one entry per app process."""
+    resolve_kind = _KindResolver()
+    return [
+        RunningProcess(
+            kind=draft.kind,
+            config_dir=draft.config_dir,
+            config_dir_source=draft.config_dir_source,
+            exe_path=draft.exe_path,
+            processes=draft.processes,
+        )
+        for draft in _running_drafts(resolve_kind)
+        if draft.processes is not None
+    ]

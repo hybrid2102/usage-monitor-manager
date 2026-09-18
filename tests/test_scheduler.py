@@ -82,6 +82,7 @@ def test_check_now_records_available_updates(config_file: Path) -> None:
     clock = FakeClock()
     notified: list[Sequence[UpdatePlan]] = []
     scheduler = UpdateScheduler(
+        check_self_update=False,
         on_updates_available=notified.append,
         plan_provider=lambda: [COPILOT_OUTDATED, CODEX_CURRENT],
         config_path=config_file,
@@ -101,6 +102,7 @@ def test_check_now_records_available_updates(config_file: Path) -> None:
 
 def test_last_check_is_persisted_per_repo(config_file: Path) -> None:
     scheduler = UpdateScheduler(
+        check_self_update=False,
         plan_provider=lambda: [COPILOT_OUTDATED, CODEX_CURRENT],
         config_path=config_file,
         clock=FakeClock(),
@@ -114,6 +116,7 @@ def test_last_check_is_persisted_per_repo(config_file: Path) -> None:
 def test_notification_is_deduped_by_repo_and_tag(config_file: Path) -> None:
     notified: list[Sequence[UpdatePlan]] = []
     scheduler = UpdateScheduler(
+        check_self_update=False,
         on_updates_available=notified.append,
         plan_provider=lambda: [COPILOT_OUTDATED],
         config_path=config_file,
@@ -134,6 +137,7 @@ def test_notification_is_deduped_by_repo_and_tag(config_file: Path) -> None:
 def test_forget_notifications_lets_a_release_notify_again(config_file: Path) -> None:
     notified: list[Sequence[UpdatePlan]] = []
     scheduler = UpdateScheduler(
+        check_self_update=False,
         on_updates_available=notified.append,
         plan_provider=lambda: [COPILOT_OUTDATED],
         config_path=config_file,
@@ -152,6 +156,7 @@ def test_skipped_version_is_neither_counted_nor_notified(config_file: Path) -> N
     )
     notified: list[Sequence[UpdatePlan]] = []
     scheduler = UpdateScheduler(
+        check_self_update=False,
         on_updates_available=notified.append,
         plan_provider=lambda: [COPILOT_OUTDATED],
         config_path=config_file,
@@ -167,6 +172,7 @@ def test_notifications_can_be_switched_off(config_file: Path) -> None:
     manager_config.save(ManagerConfig(preferences=Preferences(notify_updates=False)), config_file)
     notified: list[Sequence[UpdatePlan]] = []
     scheduler = UpdateScheduler(
+        check_self_update=False,
         on_updates_available=notified.append,
         plan_provider=lambda: [COPILOT_OUTDATED],
         config_path=config_file,
@@ -180,7 +186,7 @@ def test_a_failing_check_becomes_an_error_not_an_exception(config_file: Path) ->
     def boom() -> Sequence[UpdatePlan]:
         raise RuntimeError("rate limit exceeded")
 
-    scheduler = UpdateScheduler(plan_provider=boom, config_path=config_file, clock=FakeClock())
+    scheduler = UpdateScheduler(check_self_update=False, plan_provider=boom, config_path=config_file, clock=FakeClock())
     state = scheduler.check_now()
     assert state.error == "RuntimeError: rate limit exceeded"
     assert state.checking is False
@@ -197,6 +203,7 @@ def test_loop_waits_30s_then_the_configured_interval(config_file: Path) -> None:
         return [CODEX_CURRENT]
 
     scheduler = UpdateScheduler(
+        check_self_update=False,
         plan_provider=provider,
         config_path=config_file,
         clock=clock,
@@ -222,6 +229,7 @@ def test_interval_change_takes_effect_on_the_next_sleep(config_file: Path) -> No
         return []
 
     scheduler = UpdateScheduler(
+        check_self_update=False,
         plan_provider=provider,
         config_path=config_file,
         clock=clock,
@@ -235,6 +243,7 @@ def test_interval_change_takes_effect_on_the_next_sleep(config_file: Path) -> No
 def test_state_change_callback_sees_the_checking_flag(config_file: Path) -> None:
     seen: list[bool] = []
     scheduler = UpdateScheduler(
+        check_self_update=False,
         on_state_change=lambda state: seen.append(state.checking),
         plan_provider=lambda: [],
         config_path=config_file,
@@ -246,7 +255,9 @@ def test_state_change_callback_sees_the_checking_flag(config_file: Path) -> None
 
 def test_empty_result_does_not_write_the_config(config_file: Path) -> None:
     before = config_file.read_text(encoding="utf-8")
-    scheduler = UpdateScheduler(plan_provider=lambda: [], config_path=config_file, clock=FakeClock())
+    scheduler = UpdateScheduler(
+        check_self_update=False, plan_provider=lambda: [], config_path=config_file, clock=FakeClock()
+    )
     scheduler.check_now()
     assert config_file.read_text(encoding="utf-8") == before
 
@@ -254,6 +265,7 @@ def test_empty_result_does_not_write_the_config(config_file: Path) -> None:
 def test_start_and_stop_the_real_thread(config_file: Path) -> None:
     """The only test that uses a real thread: it must stop promptly."""
     scheduler = UpdateScheduler(
+        check_self_update=False,
         plan_provider=lambda: [],
         config_path=config_file,
         clock=FakeClock(),
@@ -278,7 +290,9 @@ def test_declared_instances_are_untouched_by_the_scheduler(config_file: Path) ->
         ),
         config_file,
     )
-    scheduler = UpdateScheduler(plan_provider=lambda: [CODEX_CURRENT], config_path=config_file, clock=FakeClock())
+    scheduler = UpdateScheduler(
+        check_self_update=False, plan_provider=lambda: [CODEX_CURRENT], config_path=config_file, clock=FakeClock()
+    )
     scheduler.check_now()
     config = manager_config.load(config_file)
     assert config.legacy_import_done is True

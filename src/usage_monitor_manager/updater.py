@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from . import github, process_control, versions
+from . import github, process_control, versions, watchdog
 from .integrity import IntegrityResult, authenticode_status, normalize_digest, parse_sidecar, sha256_file
 from .model import Instance, JsonDict, MonitorKind, ReleaseInfo, UpdatePlan
 from .versions import VersionStatus
@@ -56,6 +56,7 @@ __all__ = [
     "download_path_for",
     "plan_status",
     "plan_updates",
+    "resolve_expected_digest",
     "rollback",
 ]
 
@@ -269,6 +270,7 @@ def plan_updates(
     *,
     kinds: Sequence[str] | None = None,
     include_prerelease: bool = False,
+    prerelease_for: Callable[[str], bool] | None = None,
     token: str | None = None,
     cache_dir: Path | None = None,
 ) -> list[UpdatePlan]:
@@ -280,6 +282,9 @@ def plan_updates(
     the file on disk - not from whatever discovery cached - and the target from
     the kind's release repo, with one API call per repo even when several
     executables belong to it.
+
+    ``prerelease_for(repo)`` overrides ``include_prerelease`` per repository,
+    which is the per-repo prerelease channel of PLAN.md section 9.5.
 
     Raises:
         github.GitHubError: propagated unchanged, so the CLI can map a network
@@ -309,7 +314,7 @@ def plan_updates(
         if kind.repo not in releases:
             releases[kind.repo] = github.fetch_latest_release(
                 kind.repo,
-                include_prerelease=include_prerelease,
+                include_prerelease=include_prerelease if prerelease_for is None else prerelease_for(kind.repo),
                 token=token,
                 cache_dir=cache_dir,
             )
@@ -348,6 +353,43 @@ def _running_instances(plan: UpdatePlan) -> list[Instance]:
     return [instance for instance in plan.affected_instances if instance.is_running]
 
 
+def resolve_expected_digest(
+    target: ReleaseInfo,
+    *,
+    token: str | None = None,
+    on_note: Callable[[str], None] | None = None,
+) -> tuple[str | None, Literal["digest", "sidecar", "none"]]:
+    """The sha256 we expect for a release asset, and where it came from.
+
+    The GitHub API ``digest`` field wins; failing that the ``.exe.sha256``
+    sidecar is fetched. ``("none", None)`` means *unverifiable*, which every
+    caller must turn into an explicit question rather than a silent install.
+    Shared by :func:`apply` and by ``self_update.apply_self``.
+    """
+
+    def note(message: str) -> None:
+        if on_note is not None:
+            on_note(message)
+
+    asset = target.asset
+    if asset is not None:
+        digest = normalize_digest(asset.digest)
+        if digest:
+            return digest, "digest"
+    sidecar_url = target.sidecar_sha_url
+    if sidecar_url:
+        try:
+            text = github.fetch_text(sidecar_url, token=token)
+        except github.GitHubError as error:
+            note(f"could not fetch the .sha256 sidecar: {error}")
+            return None, "none"
+        digest = parse_sidecar(text)
+        if digest:
+            return digest, "sidecar"
+        note(f"the .sha256 sidecar at {sidecar_url} holds no usable digest")
+    return None, "none"
+
+
 def _expected_digest(
     plan: UpdatePlan,
     log: _Log,
@@ -355,23 +397,7 @@ def _expected_digest(
     token: str | None,
 ) -> tuple[str | None, Literal["digest", "sidecar", "none"]]:
     """The sha256 we expect, and where it came from."""
-    asset = plan.target.asset
-    if asset is not None:
-        digest = normalize_digest(asset.digest)
-        if digest:
-            return digest, "digest"
-    sidecar_url = plan.target.sidecar_sha_url
-    if sidecar_url:
-        try:
-            text = github.fetch_text(sidecar_url, token=token)
-        except github.GitHubError as error:
-            log("verify", f"could not fetch the .sha256 sidecar: {error}")
-            return None, "none"
-        digest = parse_sidecar(text)
-        if digest:
-            return digest, "sidecar"
-        log("verify", f"the .sha256 sidecar at {sidecar_url} holds no usable digest")
-    return None, "none"
+    return resolve_expected_digest(plan.target, token=token, on_note=lambda message: log("verify", message))
 
 
 def _restart_instances(
@@ -432,12 +458,18 @@ def apply(  # noqa: PLR0911, PLR0912, PLR0915 - the sequence is the unit here
     token: str | None = None,
     post_check_delay: float = DEFAULT_POST_CHECK_DELAY,
     gap_seconds: float = process_control.DEFAULT_GAP_SECONDS,
+    archive_keep: int | None = None,
 ) -> UpdateResult:
     """Run one plan end to end, keeping a restorable ``.bak`` until it is proven.
 
     ``confirm_unverified`` is only consulted when GitHub publishes neither a
     digest nor a sidecar; its default of ``False`` means "abort", so a caller
     that forgets about it can never install an unverified executable.
+
+    On success the displaced executable does not simply disappear: it is moved
+    into ``<exe_dir>/.umm-archive`` (PLAN.md section 9.4) so that
+    ``umm rollback --version`` still works weeks later. ``archive_keep``
+    overrides ``preferences.archive_keep``; zero disables the archive.
     """
     log = _Log(on_event)
     exe_path = plan.exe_path
@@ -519,6 +551,7 @@ def apply(  # noqa: PLR0911, PLR0912, PLR0915 - the sequence is the unit here
     # 4. stop the running instances ---------------------------------------- #
     stopped: list[str] = []
     for instance in was_running:
+        watchdog.expect_down(instance.instance_id)  # an update is not a crash (PLAN.md section 9.2)
         stop_result = process_control.stop(instance)
         log("stop", f"{instance.instance_id}: {stop_result.detail}")
         if not stop_result.ok:
@@ -591,6 +624,7 @@ def apply(  # noqa: PLR0911, PLR0912, PLR0915 - the sequence is the unit here
     # 7. post-check and cleanup -------------------------------------------- #
     ok, detail = _post_check(plan, restarted, log, delay=post_check_delay)
     if ok:
+        _archive_previous(plan, backup, log, keep=archive_keep)
         if swap.discard(backup):
             log("cleanup", f"{backup.name} deleted")
         else:
@@ -665,6 +699,7 @@ def rollback(
     was_running = [instance for instance in affected if instance.is_running]
     stopped: list[str] = []
     for instance in was_running:
+        watchdog.expect_down(instance.instance_id)  # a rollback is not a crash either
         stop_result = process_control.stop(instance)
         log("stop", f"{instance.instance_id}: {stop_result.detail}")
         if not stop_result.ok:
@@ -712,6 +747,32 @@ def rollback(
         stopped=tuple(stopped),
         restarted=tuple(restarted),
     )
+
+
+def _archive_previous(plan: UpdatePlan, backup: Path, log: _Log, *, keep: int | None) -> None:
+    """Move the replaced executable into ``.umm-archive`` (PLAN.md section 9.4).
+
+    Runs between the successful post-check and the deletion of the ``.bak``,
+    and never fails the update: an archive that cannot be written is a lost
+    convenience, not a broken installation.
+    """
+    from . import archive, manager_config
+
+    limit = keep if keep is not None else manager_config.load().preferences.archive_keep
+    if limit <= 0:
+        archive.record_current(plan.exe_path, version=plan.target.version, tag=plan.target.tag)
+        return
+    kept = archive.archive_exe(
+        plan.exe_path,
+        versions.display_version(plan.current_version),
+        source_path=backup,
+        keep=limit,
+    )
+    archive.record_current(plan.exe_path, version=plan.target.version, tag=plan.target.tag)
+    if kept is None:
+        log("cleanup", f"the previous executable could not be archived in {archive.ARCHIVE_DIR_NAME}")
+        return
+    log("cleanup", f"previous build archived as {archive.ARCHIVE_DIR_NAME}/{kept.path.name}")
 
 
 def _instances_for_exe(exe_path: Path, instances: Sequence[Instance] | None) -> list[Instance]:

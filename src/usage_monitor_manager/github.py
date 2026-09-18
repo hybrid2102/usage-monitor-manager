@@ -109,19 +109,16 @@ def rate_limit_state() -> RateLimitState | None:
 
 
 def resolve_token(token: str | None = None) -> str | None:
-    """Resolve the API token: parameter, then ``GITHUB_TOKEN``/``GH_TOKEN``.
+    """Resolve the API token, in the order of PLAN.md section 6.5-bis.
 
-    Phase 6 inserts the Windows Credential Manager (``secrets.py``) at the head
-    of this chain; the order documented in PLAN.md section 6.5-bis is otherwise
-    already the one implemented here.
+    Explicit argument, then the Windows Credential Manager, then
+    ``GITHUB_TOKEN`` / ``GH_TOKEN``, then anonymous. The whole chain lives in
+    :mod:`.secrets`; this function stays as the name the rest of the update
+    engine already imports.
     """
-    if token and token.strip():
-        return token.strip()
-    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
-        value = os.environ.get(name)
-        if value and value.strip():
-            return value.strip()
-    return None
+    from .secrets import resolve_token as resolve
+
+    return resolve(token)
 
 
 # --------------------------------------------------------------------------- #
