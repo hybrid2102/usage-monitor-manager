@@ -437,5 +437,9 @@
   "js.running": "in esecuzione",
   "js.stopped": "ferma",
   "js.click_to_copy": "clic per copiare",
-  "js.path_copied": "Percorso copiato negli appunti."
+  "js.path_copied": "Percorso copiato negli appunti.",
+  "ui.independent_settings": "Crea settings indipendenti",
+  "js.independent_settings_hint": "Questa istanza usa un file esterno alla propria cartella. Da Altro > Crea settings indipendenti puoi salvare i valori dell'editor in {path}. Riavvia poi l'istanza per applicarli.",
+  "window.independent_unavailable": "I settings indipendenti richiedono una cartella di configurazione personalizzata e un file di settings esistente da copiare.",
+  "window.independent_created": "Settings indipendenti creati in {path}. Riavvia l'istanza per applicarli."
 }

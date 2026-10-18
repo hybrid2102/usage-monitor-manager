@@ -404,3 +404,14 @@ tre posizioni esiste, la dashboard lo segnala e l'editor propone il pulsante
 nella posizione sbagliata (es. accanto all'exe quando il monitor legge quello
 nel config dir) non ha alcun effetto sul monitor: la dashboard mostra sempre
 quale delle tre posizioni è quella "attiva" e quali sono solo "in ombra".
+
+**Settings indipendenti per un'istanza.** Se un'istanza con cartella di
+configurazione personalizzata (per esempio `.claude2`) usa il file accanto
+all'eseguibile o quello della cartella predefinita, aprire **Impostazioni →
+Altro → Crea settings indipendenti**. Il manager salva i valori attualmente
+nell'editor, comprese le modifiche non ancora salvate, in
+`<config_dir>/usage-monitor-settings.json`, lasciando intatto il file di
+origine. I salvataggi successivi riguardano la copia dell'istanza. Riavviare
+l'istanza per farle leggere il nuovo file. L'azione è disponibile solo se
+la copia non esiste già e la cartella è personalizzata: per quella predefinita
+il monitor continua a dare precedenza al file accanto all'eseguibile.

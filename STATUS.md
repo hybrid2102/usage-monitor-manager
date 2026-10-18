@@ -1,11 +1,15 @@
 # Stato di avanzamento
 
-Aggiornato: 2026-09-18. Riferimento: [PLAN.md](PLAN.md) §7.
+Aggiornato: 2026-10-18. Riferimento: [PLAN.md](PLAN.md) §7.
 
-## Versione **1.0.0** pubblicata
+## Versione **1.1.0**
 
-[v1.0.0](https://github.com/hybrid2102/usage-monitor-manager/releases/tag/v1.0.0)
+[v1.1.0](https://github.com/hybrid2102/usage-monitor-manager/releases/tag/v1.1.0)
 su GitHub Releases, con `UsageMonitorManager.exe` e `.sha256`.
+
+L'editor permette di creare settings indipendenti per le istanze con cartella
+personalizzata da **Altro → Crea settings indipendenti**, includendo la bozza
+non ancora salvata senza modificare il file condiviso. Riavviare poi l'istanza.
 
 | Fase | Contenuto | Versione |
 |---|---|---|
@@ -20,7 +24,7 @@ su GitHub Releases, con `UsageMonitorManager.exe` e `.sha256`.
 | 8 | i18n it/en, `errors.py`, documentazione, stub Linux, release 1.0 | 1.0.0 |
 
 Gate all'ultimo commit: `ruff check`, `ruff format --check`, `pyright` strict,
-**896 test** verdi.
+**906 test** verdi.
 
 ## Fase 7 — commit
 

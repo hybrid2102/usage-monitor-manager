@@ -437,5 +437,9 @@
   "js.running": "running",
   "js.stopped": "stopped",
   "js.click_to_copy": "click to copy",
-  "js.path_copied": "Path copied to the clipboard."
+  "js.path_copied": "Path copied to the clipboard.",
+  "ui.independent_settings": "Create independent settings",
+  "js.independent_settings_hint": "This instance uses a file outside its own folder. Use More > Create independent settings to save the editor values to {path}. Then restart the instance to apply them.",
+  "window.independent_unavailable": "Independent settings require a custom configuration folder and an existing settings file to copy.",
+  "window.independent_created": "Independent settings created at {path}. Restart the instance to apply them."
 }

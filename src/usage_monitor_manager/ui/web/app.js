@@ -1553,6 +1553,11 @@ function applySettingsPayload(payload) {
       ? t("js.shadowed_files", { files: payload.shadowed.join(", ") })
       : "";
   $("btn-settings-create").disabled = Boolean(payload.exists);
+  $("btn-settings-independent").hidden = !payload.can_create_independent;
+  $("settings-independent-hint").hidden = !payload.can_create_independent;
+  $("settings-independent-hint").textContent = payload.can_create_independent
+    ? t("js.independent_settings_hint", { path: payload.independent_path })
+    : "";
   if (payload.error) settingsLog(t("js.read_error", { error: payload.error }));
   renderForm();
   renderHistory();
@@ -1701,6 +1706,25 @@ function wireSettings() {
   });
   $("btn-settings-folder").addEventListener("click", () => {
     if (settings.payload) call("open_folder", settings.payload.path);
+  });
+  $("btn-settings-independent").addEventListener("click", async () => {
+    if (!settings.instanceId || !settings.payload.can_create_independent) return;
+    setBusy(true);
+    try {
+      const result = await call("create_independent_settings", settings.instanceId, settings.draft);
+      if (!result || result.ok === false) {
+        toast(text(result && result.detail), "error");
+        settingsLog(text(result && result.detail));
+        if (result && result.validation) applyValidation(result.validation);
+        return;
+      }
+      applySettingsPayload(result);
+      settingsLog(text(result.detail));
+      toast(text(result.detail), "ok");
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
   });
   $("btn-settings-copy").addEventListener("click", copyFromInstance);
   $("btn-settings-export").addEventListener("click", async () => {

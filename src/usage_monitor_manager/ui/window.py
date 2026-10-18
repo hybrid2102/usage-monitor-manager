@@ -414,6 +414,16 @@ class JsApi:
         found = self._by_id([instance_id])
         return found[0] if found else None
 
+    def _independent_settings_path(self, instance: Instance) -> Path | None:
+        """Only custom config dirs take precedence over the shared file."""
+        from ..identity import config_dir_suffix
+
+        if not instance.kind.has_config_dir or instance.config_dir_unknown:
+            return None
+        if not config_dir_suffix(instance.config_dir, instance.kind.default_config_dir):
+            return None
+        return instance.config_dir / "usage-monitor-settings.json"
+
     def _settings_payload(self, instance: Instance) -> JsonDict:
         """Everything the Impostazioni page needs for one instance."""
         from ..history import versions_payload
@@ -424,6 +434,7 @@ class JsApi:
         path = instance.settings_path or suggested
         loaded = store.load(path)
         report = store.validate(instance.kind.key, loaded.data)
+        independent = self._independent_settings_path(instance)
         return {
             "ok": True,
             "instance_id": instance.instance_id,
@@ -433,6 +444,8 @@ class JsApi:
             "config_dir": str(instance.config_dir),
             "path": str(path),
             "suggested_path": str(suggested),
+            "independent_path": str(independent) if independent else None,
+            "can_create_independent": bool(independent and not independent.exists() and loaded.exists),
             "exists": loaded.exists,
             "shadowed": [str(shadow) for shadow in instance.shadow_settings_paths],
             "data": loaded.data,
@@ -518,6 +531,36 @@ class JsApi:
         instance = self._instance(instance_id) or instance
         payload = self._settings_payload(instance)
         payload["detail"] = t("window.created", path=target)
+        return payload
+
+    @errors.guarded
+    def create_independent_settings(self, instance_id: str, data: JsonDict | None = None) -> JsonDict:
+        """Copy the active settings (or editor draft) into a custom config dir."""
+        from ..settings import store
+
+        self._discover()
+        instance = self._instance(instance_id)
+        if instance is None:
+            return {"ok": False, "detail": t("window.unknown_instance_id", instance=instance_id)}
+        target = self._independent_settings_path(instance)
+        if target is None:
+            return {"ok": False, "detail": T["window.independent_unavailable"]}
+        if target.exists():
+            return {"ok": False, "detail": t("window.already_exists", path=target)}
+        source = store.load(instance.settings_path or store.suggested_path(instance))
+        if source.error or not source.exists:
+            return {"ok": False, "detail": source.error or T["window.independent_unavailable"]}
+        report = store.validate(instance.kind.key, source.data if data is None else dict(data))
+        if report.errors:
+            return {"ok": False, "detail": T["window.settings_invalid"], "validation": report.to_dict()}
+        try:
+            store.save(target, report.normalized, instance=instance)
+        except OSError as error:
+            return {"ok": False, "detail": str(error)}
+        self._discover()
+        instance = self._instance(instance_id) or instance
+        payload = self._settings_payload(instance)
+        payload["detail"] = t("window.independent_created", path=target)
         return payload
 
     # -- history -------------------------------------------------------------

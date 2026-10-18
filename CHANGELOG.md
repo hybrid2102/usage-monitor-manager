@@ -4,7 +4,22 @@ Tutte le modifiche rilevanti di questo progetto sono documentate qui.
 
 Il formato segue [Keep a Changelog](https://keepachangelog.com/it/1.1.0/)
 e il progetto adotta il [Versionamento Semantico](https://semver.org/lang/it/).
-Ogni versione corrisponde a una fase del piano di sviluppo (`PLAN.md`, §7).
+Le versioni fino alla 1.0.0 corrispondono alle fasi del piano di sviluppo (`PLAN.md`, §7).
+
+## [1.1.0] - 2026-10-18
+
+### Aggiunto
+
+- **Settings indipendenti dall'applicazione.** In **Impostazioni → Altro →
+  Crea settings indipendenti**, le istanze con cartella di configurazione
+  personalizzata (per esempio `.claude2`) possono creare una copia del file
+  condiviso nella propria cartella. La copia include le modifiche non ancora
+  salvate nell'editor e conserva le chiavi sconosciute; il file originale
+  resta intatto e i salvataggi successivi usano la copia dell'istanza.
+- Un suggerimento nell'editor mostra il percorso della copia e ricorda di
+  riavviare l'istanza per applicare il nuovo file. L'azione compare solo quando
+  la cartella personalizzata ha precedenza sul file condiviso e la copia non
+  esiste già. Valori non validi e file di origine illeggibili bloccano la copia.
 
 ## [1.0.0] - 2026-09-18
 

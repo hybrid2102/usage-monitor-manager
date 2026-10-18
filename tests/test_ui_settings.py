@@ -10,6 +10,7 @@ riavvia" must never touch a real monitor - and the quick action is a
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -127,6 +128,102 @@ def test_create_settings_uses_the_suggested_path(world: dict[str, Any]) -> None:
     assert result["ok"] is True
     assert Path(result["path"]).read_text(encoding="utf-8") == "{}\n"
     assert api.create_settings(world["codex"].instance_id)["ok"] is False
+
+
+@pytest.fixture
+def shared_settings(world: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    main: Instance = world["main"]
+    other: Instance = world["other"]
+    assert main.exe_path is not None
+    shared = main.exe_path.parent / "usage-monitor-settings.json"
+    shared.write_bytes(world["settings"].read_bytes())
+    assert other.settings_path is not None
+    other.settings_path.unlink()
+    world["settings"].unlink()
+
+    def discover(*args: Any, **kwargs: Any) -> list[Instance]:
+        instances: list[Instance] = []
+        for instance in (main, other, world["codex"]):
+            candidates = discovery.settings_candidates(instance.kind, instance.config_dir, instance.exe_path)
+            existing = [path for path in candidates if path.is_file()]
+            instances.append(
+                replace(
+                    instance,
+                    settings_path=existing[0] if existing else None,
+                    settings_exists=bool(existing),
+                    shadow_settings_paths=tuple(existing[1:]),
+                )
+            )
+        return instances
+
+    monkeypatch.setattr(discovery, "discover", discover)
+    world["api"].list_instances()
+    return {**world, "shared": shared}
+
+
+def test_independent_settings_copy_shared_file_and_redirect_future_saves(shared_settings: dict[str, Any]) -> None:
+    api: JsApi = shared_settings["api"]
+    other: Instance = shared_settings["other"]
+    shared: Path = shared_settings["shared"]
+    before = shared.read_bytes()
+    payload = api.get_settings(other.instance_id)
+    target = other.config_dir / "usage-monitor-settings.json"
+    assert payload["can_create_independent"] is True
+    assert payload["independent_path"] == str(target)
+
+    result = api.create_independent_settings(other.instance_id)
+    assert result["ok"] is True
+    assert result["path"] == str(target)
+    assert result["can_create_independent"] is False
+    assert result["shadowed"] == [str(shared)]
+    assert store.load(target).data == store.load(shared).data
+    assert len(history.list_versions(other)) == 1
+    assert api.save_settings(other.instance_id, {"poll_interval": 120})["ok"] is True
+    assert store.load(target).data == {"poll_interval": 120}
+    assert api.get_settings(shared_settings["main"].instance_id)["path"] == str(shared)
+    assert shared.read_bytes() == before
+
+
+def test_independent_settings_include_unsaved_draft(shared_settings: dict[str, Any]) -> None:
+    api: JsApi = shared_settings["api"]
+    draft = {"poll_interval": 90, "mia_chiave": {"custom": True}}
+    result = api.create_independent_settings(shared_settings["other"].instance_id, draft)
+    assert result["ok"] is True
+    assert result["data"] == draft
+
+
+def test_independent_settings_refuse_existing_file(world: dict[str, Any]) -> None:
+    other: Instance = world["other"]
+    assert other.settings_path is not None
+    before = other.settings_path.read_bytes()
+    assert world["api"].get_settings(other.instance_id)["can_create_independent"] is False
+    assert world["api"].create_independent_settings(other.instance_id)["ok"] is False
+    assert other.settings_path.read_bytes() == before
+
+
+def test_independent_settings_refuse_default_config_dir(shared_settings: dict[str, Any]) -> None:
+    api: JsApi = shared_settings["api"]
+    instance_id = shared_settings["main"].instance_id
+    assert api.get_settings(instance_id)["can_create_independent"] is False
+    assert api.create_independent_settings(instance_id)["ok"] is False
+
+
+@pytest.mark.parametrize("invalid_source", [False, True])
+def test_independent_settings_refuse_invalid_data(shared_settings: dict[str, Any], invalid_source: bool) -> None:
+    api: JsApi = shared_settings["api"]
+    other: Instance = shared_settings["other"]
+    if invalid_source:
+        shared_settings["shared"].write_text("{broken", encoding="utf-8")
+        result = api.create_independent_settings(other.instance_id)
+    else:
+        result = api.create_independent_settings(other.instance_id, {"poll_interval": 0})
+        assert result["validation"]["ok"] is False
+    assert result["ok"] is False
+    assert not (other.config_dir / "usage-monitor-settings.json").exists()
+
+
+def test_independent_settings_refuse_unknown_instance(world: dict[str, Any]) -> None:
+    assert world["api"].create_independent_settings("missing")["ok"] is False
 
 
 def test_history_list_version_and_restore(world: dict[str, Any]) -> None:
