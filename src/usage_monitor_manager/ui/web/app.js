@@ -358,7 +358,8 @@ function planList() {
 
 function renderUpdates() {
   const badge = $("nav-updates-badge");
-  const count = (state.updates.available || []).length;
+  const own = state.updates.self_update;
+  const count = (state.updates.available || []).length + (own && own.available ? 1 : 0);
   badge.hidden = !count;
   badge.textContent = String(count);
   const list = $("updates-list");
@@ -366,9 +367,32 @@ function renderUpdates() {
   const plans = planList();
   $("updates-status").textContent = state.updates.error
     ? t("js.check_failed", { error: state.updates.error })
-    : plans.length
-      ? t("js.updates_available", { count: state.updates.update_count || 0 })
+    : plans.length || own || state.updates.last_check
+      ? count === 1
+        ? t("js.one_update_available")
+        : t("js.updates_available", { count: count })
       : t("js.no_check_yet");
+
+  if (own) {
+    const button = document.createElement("button");
+    button.className = "list-item";
+    const title = document.createElement("div");
+    title.textContent = "Usage Monitor Manager" + (own.available ? "  ↑" : "");
+    if (own.available) title.className = "tag-update";
+    const sub = document.createElement("div");
+    sub.className = "sub";
+    sub.textContent = own.target_version
+      ? text(own.current_version, "?") + " → " + own.target_version
+      : text(own.detail);
+    const link = document.createElement("div");
+    link.className = "sub";
+    link.textContent = t("js.open_manager_update");
+    button.appendChild(title);
+    button.appendChild(sub);
+    button.appendChild(link);
+    button.addEventListener("click", () => goto("manager"));
+    list.appendChild(button);
+  }
 
   plans.forEach((plan) => {
     const button = document.createElement("button");
@@ -1768,8 +1792,10 @@ function onEvent(payload) {
       $("self-progress-fill").style.width = Math.round(event.progress * 100) + "%";
     }
   } else if (payload.type === "self_update_state") {
+    state.updates.self_update = payload.state;
     if (state.manager) state.manager.self_update = payload.state;
     renderSelfUpdate(payload.state);
+    renderUpdates();
   } else if (payload.type === "watchdog") {
     state.watchdog = payload.state || state.watchdog;
     renderInstances();

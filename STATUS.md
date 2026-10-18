@@ -2,14 +2,16 @@
 
 Aggiornato: 2026-10-18. Riferimento: [PLAN.md](PLAN.md) §7.
 
-## Versione **1.1.0**
+## Versione **1.1.1**
 
-[v1.1.0](https://github.com/hybrid2102/usage-monitor-manager/releases/tag/v1.1.0)
+[v1.1.1](https://github.com/hybrid2102/usage-monitor-manager/releases/tag/v1.1.1)
 su GitHub Releases, con `UsageMonitorManager.exe` e `.sha256`.
 
 L'editor permette di creare settings indipendenti per le istanze con cartella
 personalizzata da **Altro → Crea settings indipendenti**, includendo la bozza
 non ancora salvata senza modificare il file condiviso. Riavviare poi l'istanza.
+La pagina Aggiornamenti mostra anche il manager con le due versioni e un
+collegamento alla pagina dedicata; conteggio e badge includono il manager.
 
 | Fase | Contenuto | Versione |
 |---|---|---|

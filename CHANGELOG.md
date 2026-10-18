@@ -6,6 +6,21 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it/1.1.0/)
 e il progetto adotta il [Versionamento Semantico](https://semver.org/lang/it/).
 Le versioni fino alla 1.0.0 corrispondono alle fasi del piano di sviluppo (`PLAN.md`, §7).
 
+## [1.1.1] - 2026-10-18
+
+### Corretto
+
+- La pagina **Aggiornamenti** mostra anche **Usage Monitor Manager**, con
+  versione attuale e disponibile e un collegamento alla pagina Manager per
+  aggiornarlo. Prima il conteggio includeva il manager, ma l'elenco mostrava
+  solo i monitor, rendendo poco chiara l'origine dell'aggiornamento.
+- Il badge degli aggiornamenti include anche il manager e si aggiorna dopo
+  un controllo dedicato. Il riepilogo usa il singolare quando è disponibile
+  un solo aggiornamento.
+
+Include anche i settings indipendenti introdotti nella 1.1.0: è possibile
+aggiornare direttamente dalla 1.0.0 alla 1.1.1.
+
 ## [1.1.0] - 2026-10-18
 
 ### Aggiunto

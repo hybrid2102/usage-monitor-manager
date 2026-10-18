@@ -187,6 +187,8 @@
   "js.dashboard_hint": "{running} of {total} running · last update check: {last}",
   "js.check_failed": "the last check failed: {error}",
   "js.updates_available": "{count} updates available",
+  "js.one_update_available": "1 update available",
+  "js.open_manager_update": "Open manager update →",
   "js.no_check_yet": "no check has been run",
   "js.no_changelog": "No changelog available.",
   "js.no_archived_build": "No archived build for this executable.",
