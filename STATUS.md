@@ -2,9 +2,9 @@
 
 Aggiornato: 2026-10-18. Riferimento: [PLAN.md](PLAN.md) §7.
 
-## Versione **1.1.1**
+## Versione **1.1.2**
 
-[v1.1.1](https://github.com/hybrid2102/usage-monitor-manager/releases/tag/v1.1.1)
+[v1.1.2](https://github.com/hybrid2102/usage-monitor-manager/releases/tag/v1.1.2)
 su GitHub Releases, con `UsageMonitorManager.exe` e `.sha256`.
 
 L'editor permette di creare settings indipendenti per le istanze con cartella
@@ -12,6 +12,8 @@ personalizzata da **Altro → Crea settings indipendenti**, includendo la bozza
 non ancora salvata senza modificare il file condiviso. Riavviare poi l'istanza.
 La pagina Aggiornamenti mostra anche il manager con le due versioni e un
 collegamento alla pagina dedicata; conteggio e badge includono il manager.
+I preset usano colori più vivaci per testo e barrette della tray, preservando
+trasparenze e avvisi. Riapplicare il preset e salvare/riavviare l'istanza.
 
 | Fase | Contenuto | Versione |
 |---|---|---|
@@ -26,7 +28,7 @@ collegamento alla pagina dedicata; conteggio e badge includono il manager.
 | 8 | i18n it/en, `errors.py`, documentazione, stub Linux, release 1.0 | 1.0.0 |
 
 Gate all'ultimo commit: `ruff check`, `ruff format --check`, `pyright` strict,
-**906 test** verdi.
+**915 test** verdi.
 
 ## Fase 7 — commit
 

@@ -6,6 +6,17 @@ Il formato segue [Keep a Changelog](https://keepachangelog.com/it/1.1.0/)
 e il progetto adotta il [Versionamento Semantico](https://semver.org/lang/it/).
 Le versioni fino alla 1.0.0 corrispondono alle fasi del piano di sviluppo (`PLAN.md`, §7).
 
+## [1.1.2] - 2026-10-18
+
+### Modificato
+
+- Preset colore più vivaci nelle icone della tray: schiaritura iniziale ridotta
+  dal 65% al 15% e scurimento iniziale ridotto al 25%, con ulteriore regolazione
+  solo quando necessaria per il contrasto sullo sfondo di riferimento.
+- Le barrette della tray usano il colore del preset anche nei canali attenuati,
+  mantenendo le trasparenze esistenti e i colori di avviso. Riapplicare il
+  preset e salvare/riavviare l'istanza per aggiornare i settings già esistenti.
+
 ## [1.1.1] - 2026-10-18
 
 ### Corretto

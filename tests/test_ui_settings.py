@@ -273,8 +273,8 @@ def test_apply_preset_derives_bar_and_icon_colours(world: dict[str, Any]) -> Non
     result = world["api"].apply_preset(world["main"].instance_id, "#D97757", {})
     assert result["ok"] is True
     assert result["data"]["bar_fg"] == "#D97757"
-    assert result["data"]["icon_light"]["fg"] == [242, 207, 196, 255]
-    assert result["palette"]["dark"] == "#4C2A1E"
+    assert result["data"]["icon_light"]["fg"] == [223, 139, 112, 255]
+    assert result["palette"]["dark"] == "#A35941"
     assert world["api"].apply_preset(world["main"].instance_id, "rosso", {})["ok"] is False
 
 

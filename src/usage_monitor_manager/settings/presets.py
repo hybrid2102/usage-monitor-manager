@@ -1,15 +1,11 @@
 """Brand colour presets and the derived bar / icon palette.
 
-A port of ``usage-monitor-config-editor``'s ``main_window`` colour helpers
-(PLAN.md section 1.5), without Qt: one primary colour produces ``bar_fg`` plus
-the ``fg`` channel of ``icon_light`` and ``icon_dark``, blending 65 % toward
-white and black respectively so the tray icon stays readable on both a light
-and a dark taskbar.
+One primary colour produces ``bar_fg`` and vivid tray colours for dark and
+light taskbars. A small initial blend preserves brand identity; extra shading
+is applied only when needed for contrast against the reference taskbar.
 
-Only the ``fg`` channel is derived: ``fg_half``, ``fg_dim`` and ``fg_warn``
-keep whatever the user has (and get the upstream default when the file does
-not set them), because they encode meaning - half-filled bars and the warning
-red - rather than brand identity.
+The normal, half and dim channels share the brand colour, retaining the half
+and dim alpha values so bar meaning is preserved. Warning colours stay intact.
 """
 
 from __future__ import annotations
@@ -35,7 +31,9 @@ __all__ = [
 
 DEFAULT_LIGHT = "#FFFFFF"
 DEFAULT_DARK = "#000000"
-BLEND_RATIO = 0.65
+LIGHT_BLEND_RATIO = 0.15
+DARK_BLEND_RATIO = 0.25
+MIN_ICON_CONTRAST = 4.5
 
 BRAND_PRESETS: tuple[tuple[str, str], ...] = (
     ("Claude", "#D97757"),
@@ -88,13 +86,41 @@ def blend_hex(first: str, second: str, second_ratio: float) -> str:
     return "#{:02X}{:02X}{:02X}".format(*mixed)
 
 
+def _luminance(color: str) -> float:
+    channels = [channel / 255 for channel in _channels(color)]
+    linear = [value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4 for value in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast_color(primary: str, toward: str, ratio: float, background: str) -> str:
+    """Keep the initial colour unless it needs more contrast to be readable."""
+    background_luminance = _luminance(background)
+
+    def readable(color: str) -> bool:
+        luminance = _luminance(color)
+        contrast = (max(luminance, background_luminance) + 0.05) / (min(luminance, background_luminance) + 0.05)
+        return contrast >= MIN_ICON_CONTRAST
+
+    initial = blend_hex(primary, toward, ratio)
+    if readable(initial):
+        return initial
+    low, high = ratio, 1.0
+    for _ in range(20):
+        midpoint = (low + high) / 2
+        if readable(blend_hex(primary, toward, midpoint)):
+            high = midpoint
+        else:
+            low = midpoint
+    return blend_hex(primary, toward, high)
+
+
 def palette_from_primary(primary: str) -> dict[str, str]:
     """``{bar, light, dark}`` from one brand colour."""
     normalized = normalize_hex(primary)
     return {
         "bar": normalized,
-        "light": blend_hex(normalized, DEFAULT_LIGHT, BLEND_RATIO),
-        "dark": blend_hex(normalized, DEFAULT_DARK, BLEND_RATIO),
+        "light": _contrast_color(normalized, DEFAULT_LIGHT, LIGHT_BLEND_RATIO, "#202020"),
+        "dark": _contrast_color(normalized, DEFAULT_DARK, DARK_BLEND_RATIO, DEFAULT_LIGHT),
     }
 
 
@@ -121,15 +147,19 @@ def brand_preset_for(label: str) -> tuple[str, str] | None:
 
 
 def _icon_block(data: Mapping[str, Any], key: str, kind: str, fg: str) -> JsonDict:
-    """One ``icon_light`` / ``icon_dark`` object with only ``fg`` replaced."""
+    """Tint the normal channels, preserving bar opacity and warning colours."""
     defaults: dict[str, list[int]] = dict(schema_for(kind).fields[key].default)
     current: Any = data.get(key)
-    from .store import as_json_object
+    from .store import as_json_array, as_json_object
 
     block: JsonDict = as_json_object(current) or {}
     for channel, value in defaults.items():
         block.setdefault(channel, list(value))
     block["fg"] = rgba_from_hex(fg)
+    for channel in ("fg_half", "fg_dim"):
+        current_color = as_json_array(block[channel])
+        alpha = current_color[3] if current_color is not None and len(current_color) == 4 else defaults[channel][3]
+        block[channel] = rgba_from_hex(fg, alpha)
     return block
 
 

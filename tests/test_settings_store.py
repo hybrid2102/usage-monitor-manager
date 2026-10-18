@@ -270,9 +270,22 @@ def test_import_refuses_an_invalid_profile(archived: Instance, tmp_path: Path) -
 # --------------------------------------------------------------------------- #
 
 
-def test_palette_blends_65_percent_toward_white_and_black() -> None:
+def test_palette_preserves_brand_colour_with_a_small_blend() -> None:
     palette = presets.palette_from_primary("#D97757")
-    assert palette == {"bar": "#D97757", "light": "#F2CFC4", "dark": "#4C2A1E"}
+    assert palette == {"bar": "#D97757", "light": "#DF8B70", "dark": "#A35941"}
+
+
+@pytest.mark.parametrize("primary", [color for _, color in presets.BRAND_PRESETS])
+def test_preset_icon_colours_contrast_with_both_taskbar_themes(primary: str) -> None:
+    palette = presets.palette_from_primary(primary)
+
+    def luminance(color: str) -> float:
+        rgb = [int(color[offset : offset + 2], 16) / 255 for offset in (1, 3, 5)]
+        linear = [value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4 for value in rgb]
+        return sum(value * weight for value, weight in zip(linear, (0.2126, 0.7152, 0.0722), strict=True))
+
+    assert (luminance(palette["light"]) + 0.05) / (luminance("#202020") + 0.05) >= 4.5
+    assert 1.05 / (luminance(palette["dark"]) + 0.05) >= 4.5
 
 
 def test_palette_accepts_the_short_form_and_rejects_nonsense() -> None:
@@ -286,13 +299,22 @@ def test_readable_text_color_flips_on_luminance() -> None:
     assert presets.readable_text_color("#000000") == "#FFFFFF"
 
 
-def test_apply_palette_only_touches_bar_and_icon_fg() -> None:
-    data = {"bg": "#1e1e1e", "icon_light": {"fg": [1, 2, 3, 4], "fg_warn": [9, 9, 9, 9]}}
+def test_apply_palette_tints_bars_preserving_alpha_and_warnings() -> None:
+    data = {
+        "bg": "#1e1e1e",
+        "custom": "retained",
+        "icon_light": {"fg": [1, 2, 3, 4], "fg_half": [5, 6, 7, 65], "fg_warn": [9, 9, 9, 9]},
+    }
     merged = presets.apply_palette(data, "#10A37F", "codex")
     assert merged["bg"] == "#1e1e1e"
+    assert merged["custom"] == "retained"
     assert merged["bar_fg"] == "#10A37F"
     assert merged["icon_light"]["fg"] == presets.rgba_from_hex(presets.palette_from_primary("#10A37F")["light"])
     assert merged["icon_light"]["fg_warn"] == [9, 9, 9, 9]
+    assert merged["icon_light"]["fg_half"] == merged["icon_light"]["fg"][:3] + [65]
+    assert merged["icon_light"]["fg_dim"] == merged["icon_light"]["fg"][:3] + [140]
+    assert merged["icon_dark"]["fg_half"] == merged["icon_dark"]["fg"][:3] + [80]
+    assert data["icon_light"]["fg_half"] == [5, 6, 7, 65]
     assert merged["icon_dark"]["fg"] == presets.rgba_from_hex(presets.palette_from_primary("#10A37F")["dark"])
     assert store.validate("codex", merged).ok
 
